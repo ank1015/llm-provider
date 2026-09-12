@@ -190,4 +190,3 @@ The current design does not provide:
 - automatic deletion of responses, attempts, or idempotency records.
 
 These can be added when operational measurements justify the added complexity.
-
