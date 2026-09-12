@@ -1,18 +1,18 @@
-# LLM Gateway Database Schema
+# Database design
 
 ## Status and scope
 
 This document records the discussed PostgreSQL schema and its reasoning for the
-[API](./api-endpoints.md). The eight-table schema is implemented in
-`src/db/schema.ts`, with generated SQL in `migrations/0000_initial_schema.sql`
-and a connection factory/migration entry point in `src/db`. User management,
+[API reference](./api-reference.md). The eight-table schema is implemented in
+`src/db/schema.ts`, with generated SQL and metadata in `migrations/` and a
+connection factory/migration entry point in `src/db`. User management,
 key issuance/revocation, authentication, webhook-secret rotation, and provider
 account CRUD are implemented in `src/users`, `src/accounts`, and the shared
 auth/crypto modules. `src/jobs` implements submission/continuation, queries,
 cancellation, provider attempts with leased recovery/retries, atomic terminal
 callbacks, and input cleanup. `src/worker.ts` runs job execution separately from
 HTTP. `src/webhooks` implements signed callback delivery, scoped APIs, retry cycles,
-and recovery; the worker process runs both consumers independently. `src/usage`
+and recovery; the worker process runs job slots, delivery, and cleanup independently. `src/usage`
 implements scoped aggregate reporting. `src/catalogs` exposes the existing
 provider/model catalogs and owned-account model lists without new tables.
 `src/health.ts` exposes liveness and database/core-table readiness without new
@@ -20,8 +20,8 @@ tables or migrations. Migration
 `0003_webhook_retry_cycles.sql` adds two cycle fields without adding tables.
 `0004_usage_attempt_index.sql` adds an attempt-time reporting index.
 
-The starting design has **eight tables**. The original seven-table proposal is
-extended with `job_requests` so large request payloads can expire independently
+The schema has **eight tables**. `job_requests` keeps large request payloads
+separate so they can expire independently
 of job metadata, idempotency records, results, and usage history.
 
 Use one shared database schema with user ownership expressed through `user_id`,
@@ -70,7 +70,8 @@ They must also filter every operation by the authenticated user.
 UUIDs and initial timestamps have database defaults. Retention expiry has no
 creation-time default: the completion workflow sets it only after the
 job becomes terminal. Cost/count nulls stay null rather than defaulting to zero.
-See [README.md](./README.md#database) for migration and test commands.
+See [Development and testing](./development.md#schema-changes) for migration and
+test commands.
 
 ## 1. `users`
 
@@ -276,7 +277,7 @@ same transaction before returning `202 Accepted`.
 ### Continuation through `previousJobId`
 
 `POST /v1/jobs` accepts either a fresh request or a continuation, as described in
-[api-endpoints.md](./api-endpoints.md). No additional table or endpoint is needed.
+[API reference](./api-reference.md). No additional table or endpoint is needed.
 
 For continuation, `messages` is a required, non-null array. Omitted/null values
 are invalid rather than being converted to an empty array. Account, model,
@@ -440,7 +441,7 @@ Constraints and behavior:
 
 Migration `0003` initializes existing rows to `retry_from_attempt = 1` and the
 migration time for `retry_started_at`, then enforces a positive first attempt.
-Apply migrations before starting the updated API/worker.
+Apply migrations before starting the API or worker.
 
 ## 8. `webhook_delivery_attempts`
 
@@ -573,7 +574,7 @@ Runtime connections bound pool acquisition to five seconds, lock waits to three
 seconds, statements to five seconds, and client query waits to ten seconds.
 Idle transactions are closed after thirty seconds. Local lease/deadline timers
 abort provider I/O independently of a stalled heartbeat query. Migrations use
-longer statement/query limits; see the README.
+longer statement/query limits; see [Operations](./operations.md#database-behavior).
 
 Provider retries and webhook retries have independent schedules. Both policies
 below are implemented.
@@ -585,6 +586,9 @@ additional charges. Cancellation is also best-effort, not a billing rollback.
 
 ### Implemented job policy
 
+- Each worker process runs `WORKER_CONCURRENCY` execution slots (1–128, default 1),
+  sharing one database pool. Cleanup and webhook delivery each have one independent
+  loop per process. Slots have independent job leases and all observe shutdown.
 - Three attempts maximum; 30-minute deadline measured from job creation,
   including queue/backoff time. Account per-call timeouts still apply and are
   capped by the remaining deadline. Deadlines are derived from `created_at`,
@@ -651,12 +655,13 @@ additional charges. Cancellation is also best-effort, not a billing rollback.
   rules as an additional network boundary.
 - HMAC-SHA256 signs the raw JSON with the literal current webhook secret and a
   timestamp/event-ID prefix. URL and event payload are immutable snapshots;
-  signing timestamps/secrets can change per attempt. See the README for receiver
-  verification, freshness checks, and event-ID deduplication.
+  signing timestamps/secrets can change per attempt. See
+  [Operations](./operations.md#webhook-receivers) for receiver verification,
+  freshness checks, and event-ID deduplication.
 - Shutdown leaves dispatched work for lease recovery. An acknowledgement lost
   before committing can produce a duplicate callback, never another LLM call.
 
-## Remaining decisions before feature implementation
+## Future considerations
 
 - **Credential purge:** old configuration versions are not retained; encrypted
   secrets on soft-deleted accounts currently remain until a purge policy exists.
@@ -666,8 +671,8 @@ additional charges. Cancellation is also best-effort, not a billing rollback.
   by purging idempotency records too early. Preserve parent job references
   independently of payload expiry, and define continuation availability if
   full responses later expire.
-- **Scheduling:** add per-user fairness/rate limits or greater worker concurrency
-  only when needed. Each current worker handles one provider call at a time.
+- **Scheduling:** worker concurrency is configurable per process. Add per-user
+  fairness/rate limits or memory-aware admission when needed.
 
 ## PostgreSQL references
 
