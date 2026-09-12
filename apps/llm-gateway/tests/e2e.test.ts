@@ -79,7 +79,7 @@ it("runs the compiled gateway end to end with all three provider protocols", { t
       receiverErrors.push(error);
       res.writeHead(500); res.end();
     }
-  });
+  }, { workerConcurrency: 3 });
   try {
     const { request, adminKey } = stack;
     const registered = await request("/v1/admin/users", adminKey, "POST", { name: "E2E", callbackUrl: `${stack.origin}/events` }, 201);

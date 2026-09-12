@@ -25,7 +25,7 @@ export async function until<T>(read: () => Promise<T>, done: (value: T) => boole
 }
 
 /** Real compiled processes, an isolated database, and a trusted local HTTPS receiver. */
-export async function startStack(receiver: RequestListener) {
+export async function startStack(receiver: RequestListener, { workerConcurrency = 1 } = {}) {
   const baseUrl = process.env.TEST_DATABASE_URL;
   if (!baseUrl) throw new Error("TEST_DATABASE_URL must identify a disposable PostgreSQL server with CREATE DATABASE permission.");
   const { pool: adminPool } = createDatabase(baseUrl);
@@ -78,7 +78,7 @@ export async function startStack(receiver: RequestListener) {
     // Real provider keys stay in the test runner, not child environments or process arguments.
     const { LIVE_OPENAI_API_KEY: _openai, LIVE_FIREWORKS_API_KEY: _fireworks, ...inherited } = process.env;
     const env = { ...inherited, DATABASE_URL: databaseUrl.href, ADMIN_API_KEY: adminKey,
-      ENCRYPTION_KEY: randomBytes(32).toString("hex"), PORT: "0", REQUEST_RETENTION_DAYS: "1",
+      ENCRYPTION_KEY: randomBytes(32).toString("hex"), PORT: "0", REQUEST_RETENTION_DAYS: "1", WORKER_CONCURRENCY: String(workerConcurrency),
       PROVIDER_ALLOWED_ORIGINS: origin, WEBHOOK_ALLOWED_ORIGINS: origin, NODE_EXTRA_CA_CERTS: cert };
     const launch = (file: string) => {
       const child = { process: spawn(process.execPath, [file], { cwd, env, stdio: ["ignore", "pipe", "pipe"] }), output: "" };
