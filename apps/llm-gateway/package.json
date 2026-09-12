@@ -1,0 +1,40 @@
+{
+  "name": "@llm-providers/llm-gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.test.json",
+    "start": "node dist/index.js",
+    "worker:dev": "tsx src/worker.ts",
+    "worker": "node dist/worker.js",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "test": "tsx --test tests/crypto.test.ts tests/jobs-unit.test.ts tests/webhooks-unit.test.ts tests/usage-unit.test.ts tests/catalogs-unit.test.ts tests/health.test.ts",
+    "test:e2e": "tsx --test --test-concurrency=1 tests/e2e.test.ts",
+    "test:live": "tsx --test --test-concurrency=1 tests/live.test.ts",
+    "test:db": "tsx --test --test-concurrency=1 tests/db.test.ts tests/users.test.ts tests/accounts.test.ts tests/jobs.test.ts tests/webhooks.test.ts tests/usage.test.ts tests/catalogs.test.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@llm-providers/contracts": "workspace:*",
+    "@llm-providers/provider-openai": "workspace:*",
+    "@llm-providers/provider-chatgpt": "workspace:*",
+    "@llm-providers/provider-fireworks": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.23.0",
+    "hono": "^4.13.7",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.23.13"
+  }
+}
