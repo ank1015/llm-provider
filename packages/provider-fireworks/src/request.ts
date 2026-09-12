@@ -23,7 +23,7 @@ export function buildChatCompletionRequest({
   messages: readonly Message[];
   tools?: readonly ToolDefinition[];
   providerOptions?: ProviderOptions;
-}): { model: FireworksModelId; messages?: unknown[]; [key: string]: unknown } {
+}): { model: FireworksModelId; messages: unknown[]; [key: string]: unknown } {
   if (!FIREWORKS_MODELS.some((model) => model.id === modelId)) {
     throw invalidRequest(`Unsupported Fireworks model: ${modelId}.`);
   }
@@ -33,6 +33,9 @@ export function buildChatCompletionRequest({
   if ("codex_responses_lite" in providerOptions) {
     throw invalidRequest("Fireworks Chat Completions does not support providerOptions.codex_responses_lite.");
   }
+  if ("prompt_token_ids" in providerOptions) {
+    throw invalidRequest("Fireworks provider does not support providerOptions.prompt_token_ids. Use messages instead.");
+  }
 
   const options = { ...providerOptions };
   for (const key of ["model", "messages", "tools", "stream", "n"]) {
@@ -41,19 +44,17 @@ export function buildChatCompletionRequest({
 
   const mappedTools = tools.map(mapTool);
   const mappedMessages: unknown[] = [];
-  if (!("prompt_token_ids" in options)) {
-    if (instructions !== undefined) {
-      mappedMessages.push({ role: "system", content: instructions });
-    }
-    mappedMessages.push(...messages.flatMap((message) => mapMessage(message, tools)));
+  if (instructions !== undefined) {
+    mappedMessages.push({ role: "system", content: instructions });
   }
+  mappedMessages.push(...messages.flatMap((message) => mapMessage(message, tools)));
 
   return {
     ...options,
     model: modelId,
     stream: false,
     n: 1,
-    ...("prompt_token_ids" in options ? {} : { messages: mappedMessages }),
+    messages: mappedMessages,
     ...(mappedTools.length ? { tools: mappedTools } : {}),
   };
 }

@@ -36,9 +36,11 @@ describe("createFireworksClient", () => {
     });
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.timestamp).toBeLessThanOrEqual(Date.now());
-    await client.complete({ ...input, messages: [...input.messages, result.message] });
+    const next = { role: "user" as const, content: [{ type: "text" as const, text: "Tell me more." }] };
+    await client.complete({ ...input, messages: [...input.messages, result.message, next] });
     const followup = JSON.parse(fetch.mock.calls[1]?.[1]?.body as string);
     expect(followup.messages[2]).toEqual(native().choices[0]!.message);
+    expect(followup.messages[3]).toEqual(next);
     expect(JSON.stringify(client)).not.toContain("test-key");
   });
 
@@ -76,6 +78,7 @@ describe("createFireworksClient", () => {
     { ...input, modelId: "unknown" as FireworksRequestInput["modelId"] },
     { ...input, providerOptions: { service_tier: "priority" } },
     { ...input, providerOptions: { codex_responses_lite: false } },
+    { ...input, providerOptions: { prompt_token_ids: [1, 2, 3] } },
     { ...input, messages: [{ role: "assistant", provider: "openai", content: [] }] } as FireworksRequestInput,
     { ...input, messages: [{ role: "custom", tag: "unknown", data: {} }] } as FireworksRequestInput,
     { ...input, messages: [{ role: "tool_result", toolName: "missing", toolCallId: "1", content: [], outcome: { status: "success" } }] } as FireworksRequestInput,

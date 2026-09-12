@@ -32,6 +32,8 @@ must honor the abort signal during both requests and body reads.
 
 The request adapter forces `stream: false` and `n: 1`. Options such as
 `prompt_cache_key` stay in the JSON body; no ChatGPT cache-affinity headers are added.
+`providerOptions.prompt_token_ids` is unsupported and rejected before any HTTP
+request. Always supply conversation input through `messages`, including follow-ups.
 The response adapter selects choice zero and stores its complete native message as
 `response.message.content = [choice.message]`, preserving text, reasoning, tool calls,
 and unfamiliar fields for replay. Costs are standard catalog estimates using input,

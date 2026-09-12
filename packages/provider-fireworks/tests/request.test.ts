@@ -104,29 +104,10 @@ describe("buildChatCompletionRequest", () => {
     ] }]);
   });
 
-  it("omits all messages including instructions when prompt_token_ids is supplied", () => {
-    const body = buildChatCompletionRequest({
-      modelId, instructions: "Not sent", tools: [tool],
-      messages: [{ role: "user", content: [{ type: "text", text: "Not sent" }] }],
-      providerOptions: { prompt_token_ids: [1, 2, 3], messages: ["bypass"] },
-    });
-    expect(body).not.toHaveProperty("messages");
-    expect(body).not.toHaveProperty("instructions");
-    expect(body.prompt_token_ids).toEqual([1, 2, 3]);
-    expect(body.tools).toHaveLength(1);
-  });
-
-  it("skips message validation when prompt_token_ids is supplied", () => {
-    const body = buildChatCompletionRequest({
-      modelId,
-      messages: [
-        { role: "assistant", provider: "openai", content: [] },
-        { role: "custom", tag: "application", data: {} },
-        { role: "tool_result", toolName: "missing", toolCallId: "call-1", content: [], outcome: { status: "success" } },
-      ],
-      providerOptions: { prompt_token_ids: [1, 2, 3] },
-    });
-    expect(body).toEqual({ model: modelId, stream: false, n: 1, prompt_token_ids: [1, 2, 3] });
+  it.each([{ prompt_token_ids: [1, 2, 3] }, { prompt_token_ids: [] }, { prompt_token_ids: null }, { prompt_token_ids: undefined }])("rejects the tokenized-prompt option: %j", (providerOptions) => {
+    expect(() => buildChatCompletionRequest({
+      modelId, messages: [], providerOptions,
+    })).toThrow("does not support providerOptions.prompt_token_ids");
   });
 
   it("rejects unsupported models, providers, tags and missing tool definitions", () => {
