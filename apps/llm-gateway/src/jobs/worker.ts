@@ -108,12 +108,12 @@ export async function renewClaim(db: Database, claim: Claim) {
   return job;
 }
 
-/** One job per process; run additional processes for concurrency. */
+/** One execution slot; claims, cancellation, and leases remain per job. */
 export async function runOnce(db: Database, execute: Execute, signal: AbortSignal, retentionDays = DEFAULT_RETENTION_DAYS) {
   if (signal.aborted) return false;
   const claim = await claimJob(db, retentionDays);
   if (!claim) return false;
-  if (claim.completed) return true;
+  if (claim.completed || signal.aborted) return true;
   const call = new AbortController();
   const stopHeartbeat = new AbortController();
   const onShutdown = () => call.abort();
@@ -164,18 +164,31 @@ export async function runOnce(db: Database, execute: Execute, signal: AbortSigna
   return true;
 }
 
-export async function runWorker(db: Database, execute: Execute, signal: AbortSignal, retentionDays = DEFAULT_RETENTION_DAYS) {
-  let cleanupAt = 0;
-  while (!signal.aborted) {
-    try {
-      if (Date.now() >= cleanupAt) {
-        const removed = await cleanupRequests(db);
-        cleanupAt = removed === 100 ? 0 : Date.now() + 60_000;
+/** Fixed execution slots share one database pool and one independent cleanup loop. */
+export async function runWorker(db: Database, execute: Execute, signal: AbortSignal,
+  retentionDays = DEFAULT_RETENTION_DAYS, concurrency = 1) {
+  async function consume() {
+    while (!signal.aborted) {
+      try {
+        if (await runOnce(db, execute, signal, retentionDays)) continue;
+      } catch {
+        console.error("Job worker operation failed; uncompleted claims will recover after lease expiry.");
       }
-      if (await runOnce(db, execute, signal, retentionDays)) continue;
-    } catch {
-      console.error("Job worker operation failed; uncompleted claims will recover after lease expiry.");
+      await sleep(1000, undefined, { signal }).catch(() => {});
     }
-    await sleep(1000, undefined, { signal }).catch(() => {});
+  }
+  await Promise.all([runCleanup(db, signal), ...Array.from({ length: concurrency }, consume)]);
+}
+
+async function runCleanup(db: Database, signal: AbortSignal) {
+  while (!signal.aborted) {
+    let delay = 60_000;
+    try {
+      if (await cleanupRequests(db) === 100) continue;
+    } catch {
+      console.error("Request cleanup failed; it will be retried.");
+      delay = 1000;
+    }
+    await sleep(delay, undefined, { signal }).catch(() => {});
   }
 }

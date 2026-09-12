@@ -12,7 +12,7 @@ import { jobAttempts, jobRequests, jobs, providerAccounts, userApiKeys, users, w
 import { createUser } from "../src/users/service.js";
 import { createAccount, updateAccount } from "../src/accounts/service.js";
 import { createExecutor } from "../src/jobs/provider.js";
-import { claimJob, completeClaim, renewClaim, runOnce } from "../src/jobs/worker.js";
+import { claimJob, completeClaim, renewClaim, runOnce, runWorker } from "../src/jobs/worker.js";
 import { cleanupRequests } from "../src/jobs/retention.js";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -58,6 +58,13 @@ async function claim() {
 }
 async function due(id: string) { await db.update(jobs).set({ nextAttemptAt: new Date(0) }).where(eq(jobs.id, id)); }
 async function expireLease(id: string) { await db.update(jobs).set({ leaseExpiresAt: new Date(0) }).where(eq(jobs.id, id)); }
+async function until(check: () => Promise<boolean>) {
+  const deadline = Date.now() + 5000;
+  while (!await check()) {
+    assert.ok(Date.now() < deadline, "Timed out waiting for worker state");
+    await sleep(10);
+  }
+}
 
 before(async () => { await migrate(db, { migrationsFolder: fileURLToPath(new URL("../migrations", import.meta.url)) }); });
 after(async () => { await pool.end(); });
@@ -404,6 +411,81 @@ describe("jobs API and worker", () => {
     assert.deepEqual((await attempts(stale.job.id)).map((row) => row.status), ["unknown", "succeeded"]);
   });
 
+  for (const concurrency of [undefined, 3, 32]) {
+    it(`bounds worker execution to ${concurrency ?? "the default single"} slot(s) and keeps processing after a failure`, { timeout: 10_000 }, async () => {
+      const slots = concurrency ?? 1;
+      const count = slots * 2 + 1;
+      const queued = await Promise.all(Array.from({ length: count }, (_,i) => submit(fresh({ instructions: String(i) }))));
+      const controller = new AbortController();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let active = 0;
+      let peak = 0;
+      const calls: string[] = [];
+      const running = runWorker(db, async (_account, _model, input, callSignal) => {
+        calls.push(input.instructions!);
+        peak = Math.max(peak, ++active);
+        try {
+          await gate;
+          await sleep(10, undefined, { signal: callSignal });
+          if (input.instructions === "0") throw new LlmError("Fixture failure", { provider: "openai", kind: "invalid_request" });
+          return response();
+        } finally { active--; }
+      }, controller.signal, 7, concurrency);
+      try {
+        await until(async () => calls.length >= slots);
+        await sleep(50);
+        assert.equal(calls.length, slots, "Queued jobs must not start while all slots are occupied");
+        release();
+        await until(async () => (await db.select({ status: jobs.status }).from(jobs).where(inArray(jobs.id, queued.map(job => job.id))))
+          .every(job => job.status === "succeeded" || job.status === "failed"));
+        assert.equal(peak, slots);
+        assert.equal(calls.length, count);
+        assert.equal(new Set(calls).size, count);
+        for (let i = 0; i < queued.length; i++) {
+          assert.equal((await stored(queued[i]!.id)).status, i === 0 ? "failed" : "succeeded");
+          assert.equal((await attempts(queued[i]!.id)).length, 1);
+          assert.equal((await events(queued[i]!.id)).length, 1);
+        }
+      } finally {
+        controller.abort();
+        release();
+        await running;
+      }
+    });
+  }
+
+  it("cleans expired input while slots are busy and aborts every active call on shutdown", { timeout: 10_000 }, async () => {
+    const expired = await submit();
+    await completeClaim(db, await claim(), { response: response() });
+    await db.update(jobRequests).set({ expiresAt: new Date(0) }).where(eq(jobRequests.jobId, expired.id));
+    const queued = await Promise.all(Array.from({ length: 7 }, () => submit()));
+    const controller = new AbortController();
+    let started = 0;
+    let aborted = 0;
+    const running = runWorker(db, async (_account, _model, _input, callSignal) => {
+      started++;
+      try { await sleep(60_000, undefined, { signal: callSignal }); }
+      finally { if (callSignal.aborted) aborted++; }
+      return response();
+    }, controller.signal, 7, 3);
+    try {
+      await until(async () => started === 3);
+      await until(async () => (await db.select().from(jobRequests).where(eq(jobRequests.jobId, expired.id))).length === 0);
+    } finally {
+      controller.abort();
+      await running;
+    }
+    assert.equal(started, 3);
+    assert.equal(aborted, 3);
+    const rows = await db.select().from(jobs).where(inArray(jobs.id, queued.map(job => job.id)));
+    assert.equal(rows.filter(job => job.status === "running").length, 3);
+    assert.equal(rows.filter(job => job.status === "queued").length, 4);
+    assert.ok(rows.every(job => job.cancelRequestedAt === null && job.response === null));
+    for (const job of queued) assert.equal((await events(job.id)).length, 0);
+    await runWorker(db, async () => { assert.fail("Stopped workers must not dispatch"); }, controller.signal, 7, 3);
+  });
+
   it("recovers cancellation and exhausted crashed attempts without another provider call", async () => {
     const cancelled = await submit();
     await claim();
@@ -447,6 +529,23 @@ describe("jobs API and worker", () => {
     await expireLease(job.id);
     await runOnce(db, async () => response(), signal());
     assert.equal((await stored(job.id)).status, "succeeded");
+  });
+
+  it("does not dispatch a provider call when shutdown arrives during a pending claim", { timeout: 10_000 }, async () => {
+    const job = await submit();
+    const controller = new AbortController();
+    const clients = await Promise.all(Array.from({ length: pool.options.max! }, () => pool.connect()));
+    const running = runOnce(db, async () => { assert.fail("Shutdown must prevent provider dispatch"); }, controller.signal);
+    try {
+      await until(async () => pool.waitingCount > 0);
+    } finally {
+      controller.abort();
+      for (const client of clients) client.release();
+      await running;
+    }
+    assert.equal((await stored(job.id)).status, "running");
+    assert.equal((await attempts(job.id)).length, 1);
+    assert.equal((await events(job.id)).length, 0);
   });
 
   it("blocks new attempts after disable/delete but lets an existing claim complete", async () => {
