@@ -16,6 +16,7 @@ const environment = z.object({
   PROVIDER_ALLOWED_ORIGINS: origins,
   WEBHOOK_ALLOWED_ORIGINS: origins.refine((values) => values.every((value) => value.startsWith("https://"))),
   REQUEST_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(DEFAULT_RETENTION_DAYS),
+  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(128).default(1),
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
@@ -32,6 +33,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     providerOrigins: result.data.PROVIDER_ALLOWED_ORIGINS,
     webhookOrigins: result.data.WEBHOOK_ALLOWED_ORIGINS,
     requestRetentionDays: result.data.REQUEST_RETENTION_DAYS,
+    workerConcurrency: result.data.WORKER_CONCURRENCY,
   };
 }
 

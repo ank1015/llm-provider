@@ -45,6 +45,13 @@ it("rejects tampered, truncated, and unsupported ciphertext", () => {
 it("loads required configuration and fails without revealing secret values", () => {
   const env = { DATABASE_URL: "postgresql://localhost/gateway", ADMIN_API_KEY: "a".repeat(32), ENCRYPTION_KEY: "ab".repeat(32) };
   assert.equal(loadConfig(env).port, 3000);
+  assert.equal(loadConfig(env).workerConcurrency, 1);
+  for (const value of ["1", "16", "32", "128"]) {
+    assert.equal(loadConfig({ ...env, WORKER_CONCURRENCY: value }).workerConcurrency, Number(value));
+  }
+  for (const value of ["", "0", "-1", "1.5", "129", "Infinity", "abc"]) {
+    assert.throws(() => loadConfig({ ...env, WORKER_CONCURRENCY: value }), /WORKER_CONCURRENCY/);
+  }
   assert.deepEqual(loadConfig(env).encryptionKey, Buffer.from(env.ENCRYPTION_KEY, "hex"));
   assert.equal(loadConfig({ ...env, PORT: "0" }).port, 0);
   for (const patch of [
