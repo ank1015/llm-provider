@@ -70,7 +70,7 @@ jobs:
           apps/llm-gateway/deploy/Caddyfile
           apps/llm-gateway/deploy/compose.production.yml
           apps/llm-gateway/deploy/deploy.sh
-          "$GATEWAY_INSTANCE:/tmp/"
+          "$GATEWAY_INSTANCE:./"
           --project="$GCP_PROJECT_ID"
           --zone="$GCP_ZONE"
           --tunnel-through-iap
@@ -83,7 +83,7 @@ jobs:
             --zone="$GCP_ZONE" \
             --tunnel-through-iap \
             --quiet \
-            --command="sudo install -m 0600 /tmp/Caddyfile /opt/llm-providers-gateway/Caddyfile && sudo install -m 0600 /tmp/compose.production.yml /opt/llm-providers-gateway/compose.production.yml && sudo install -m 0700 /tmp/deploy.sh /opt/llm-providers-gateway/deploy.sh && sudo env GATEWAY_IMAGE=$IMAGE:$GITHUB_SHA GATEWAY_HOST=$GATEWAY_HOST GCP_PROJECT_NUMBER=$GCP_PROJECT_NUMBER /opt/llm-providers-gateway/deploy.sh"
+            --command="sudo install -m 0600 Caddyfile /opt/llm-providers-gateway/Caddyfile && sudo install -m 0600 compose.production.yml /opt/llm-providers-gateway/compose.production.yml && sudo install -m 0700 deploy.sh /opt/llm-providers-gateway/deploy.sh && sudo env GATEWAY_IMAGE=$IMAGE:$GITHUB_SHA GATEWAY_HOST=$GATEWAY_HOST GCP_PROJECT_NUMBER=$GCP_PROJECT_NUMBER /opt/llm-providers-gateway/deploy.sh"
 
       - name: Verify production
         run: |
