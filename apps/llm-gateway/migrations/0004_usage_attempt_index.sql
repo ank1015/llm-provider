@@ -1,0 +1,1 @@
+CREATE INDEX "job_attempts_started_job_idx" ON "job_attempts" USING btree ("started_at","job_id");

@@ -1,0 +1,3 @@
+DROP INDEX "provider_accounts_live_user_provider_idx";--> statement-breakpoint
+CREATE INDEX "provider_accounts_live_user_created_idx" ON "provider_accounts" USING btree ("user_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST) WHERE "provider_accounts"."deleted_at" is null;--> statement-breakpoint
+CREATE INDEX "provider_accounts_live_user_provider_created_idx" ON "provider_accounts" USING btree ("user_id","provider","created_at" DESC NULLS LAST,"id" DESC NULLS LAST) WHERE "provider_accounts"."deleted_at" is null;
