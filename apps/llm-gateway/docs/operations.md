@@ -64,7 +64,8 @@ Every push to `main` runs `.github/workflows/deploy-gateway.yml`. The workflow:
 1. installs dependencies and runs the build and non-live test suite;
 2. exchanges GitHub's short-lived OIDC token for the narrowly scoped Google
    Cloud deployer identity, with no stored service-account key;
-3. builds an image in Cloud Build and tags it with the immutable Git commit SHA;
+3. builds an image on the GitHub runner, tags it with the immutable Git commit
+   SHA, and publishes it to Artifact Registry;
 4. uploads the deployment manifests to the VM through IAP-only SSH;
 5. pulls the image, applies pending migrations, replaces the API, verifies
    readiness, and then replaces the worker; and
