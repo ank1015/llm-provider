@@ -1,0 +1,44 @@
+services:
+  migrate:
+    image: ${GATEWAY_IMAGE}
+    env_file: .env
+    command: ["node", "apps/llm-gateway/dist/db/migrate.js"]
+    volumes:
+      - ./prod-ca-2021.crt:/etc/ssl/certs/supabase.crt:ro
+    restart: "no"
+
+  api:
+    image: ${GATEWAY_IMAGE}
+    env_file: .env
+    command: ["node", "apps/llm-gateway/dist/index.js"]
+    volumes:
+      - ./prod-ca-2021.crt:/etc/ssl/certs/supabase.crt:ro
+    restart: unless-stopped
+
+  worker:
+    image: ${GATEWAY_IMAGE}
+    env_file: .env
+    command: ["node", "apps/llm-gateway/dist/worker.js"]
+    volumes:
+      - ./prod-ca-2021.crt:/etc/ssl/certs/supabase.crt:ro
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.10-alpine
+    environment:
+      GATEWAY_HOST: ${GATEWAY_HOST}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

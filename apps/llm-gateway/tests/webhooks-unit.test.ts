@@ -48,7 +48,7 @@ it("sends signed JSON and treats any 2xx as acknowledgement without reading the 
   assert.ok(cancelled);
 });
 
-it("only allows exact trusted HTTPS origins and sends nothing for disallowed URLs", async () => {
+it("only allows trusted exact or wildcard HTTPS origins and sends nothing for disallowed URLs", async () => {
   let calls = 0;
   const sender = createSender(key, origins, async () => { calls++; return new Response(); });
   for (const url of ["https://callbacks.example.com.evil.test/events", "https://callbacks.example.com:8443",
@@ -60,6 +60,13 @@ it("only allows exact trusted HTTPS origins and sends nothing for disallowed URL
   assert.equal((await createSender(key, [], async () => { calls++; return new Response(); })(delivery, encrypted, signal())).error?.code, "destination_not_allowed");
   assert.equal(calls, 0);
   assert.ok(destinationAllowed("https://callbacks.example.com/path?tenant=1", origins));
+  const wildcard = ["https://*.acentric.dev"];
+  assert.ok(destinationAllowed("https://app.acentric.dev/events", wildcard));
+  assert.ok(destinationAllowed("https://hooks.eu.acentric.dev/events", wildcard));
+  for (const url of ["https://acentric.dev/events", "https://acentric.dev.evil.test/events",
+    "https://app.acentric.dev:8443/events", "http://app.acentric.dev/events"]) {
+    assert.equal(destinationAllowed(url, wildcard), false);
+  }
 });
 
 it("does not follow redirects or retry permanent HTTP failures", async () => {
@@ -118,7 +125,9 @@ it("validates webhook origin configuration without implicitly trusting provider 
   assert.deepEqual(loadConfig(env).webhookOrigins, []);
   assert.deepEqual(loadConfig({ ...env, PROVIDER_ALLOWED_ORIGINS: origins[0] }).webhookOrigins, []);
   assert.deepEqual(loadConfig({ ...env, WEBHOOK_ALLOWED_ORIGINS: origins[0] }).webhookOrigins, origins);
-  for (const value of ["http://localhost:8080", "https://example.com/path", "https://user:secret@example.com", "*"]) {
+  assert.deepEqual(loadConfig({ ...env, WEBHOOK_ALLOWED_ORIGINS: "https://*.acentric.dev" }).webhookOrigins, ["https://*.acentric.dev"]);
+  for (const value of ["http://localhost:8080", "https://example.com/path", "https://user:secret@example.com", "*",
+    "https://*.acentric.dev:8443", "https://*.127.0.0.1", "https://*.*.acentric.dev"]) {
     assert.throws(() => loadConfig({ ...env, WEBHOOK_ALLOWED_ORIGINS: value }));
   }
 });

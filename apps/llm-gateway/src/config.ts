@@ -8,13 +8,24 @@ const origins = z.string().default("").transform((value) => value.split(",").map
       && url.origin === value;
   })));
 
+const webhookOrigins = z.string().default("").transform((value) => value.split(",").map((item) => item.trim()).filter(Boolean))
+  .pipe(z.array(z.string().refine((value) => {
+    if (!value.startsWith("https://*.")) {
+      try { return new URL(value).origin === value && value.startsWith("https://"); }
+      catch { return false; }
+    }
+    const hostname = value.slice("https://*.".length);
+    return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(hostname)
+      && !/^\d+(?:\.\d+){3}$/.test(hostname);
+  })));
+
 const environment = z.object({
   DATABASE_URL: z.url().refine((value) => /^postgres(?:ql)?:\/\//.test(value)),
   ADMIN_API_KEY: z.string().min(32).max(512).regex(/^\S+$/),
   ENCRYPTION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/),
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
   PROVIDER_ALLOWED_ORIGINS: origins,
-  WEBHOOK_ALLOWED_ORIGINS: origins.refine((values) => values.every((value) => value.startsWith("https://"))),
+  WEBHOOK_ALLOWED_ORIGINS: webhookOrigins,
   REQUEST_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(DEFAULT_RETENTION_DAYS),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(128).default(1),
 });

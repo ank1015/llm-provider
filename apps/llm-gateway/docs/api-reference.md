@@ -63,8 +63,10 @@ callback delivery.
 - Callback URLs must be HTTPS, at most 2048 characters, and have no embedded
   credentials or fragment. Registration/update only stores the URL; it does
   not contact it. Delivery separately requires an operator-trusted HTTPS origin
-  in `WEBHOOK_ALLOWED_ORIGINS`, with no redirects. Operator DNS and deployment
-  egress policy are part of that trust boundary.
+  in `WEBHOOK_ALLOWED_ORIGINS`, with no redirects. An entry such as
+  `https://*.acentric.dev` allows HTTPS subdomains at any depth, but not the
+  apex domain or nonstandard ports. Operator DNS and deployment egress policy
+  are part of that trust boundary.
 
 ## 2. User settings
 

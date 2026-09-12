@@ -1,0 +1,91 @@
+name: Deploy LLM gateway
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: llm-gateway-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: project-2c02a9f6-1ff5-461d-ae0
+  GCP_PROJECT_NUMBER: "361197090477"
+  GCP_REGION: asia-south1
+  GCP_ZONE: asia-south1-a
+  GATEWAY_INSTANCE: llm-providers-gateway-1
+  GATEWAY_HOST: gateway.acentric.dev
+  IMAGE: asia-south1-docker.pkg.dev/project-2c02a9f6-1ff5-461d-ae0/llm-providers/llm-gateway
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10.15.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Verify application
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm test
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: projects/361197090477/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: llm-providers-deployer@project-2c02a9f6-1ff5-461d-ae0.iam.gserviceaccount.com
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+
+      - name: Build and publish image
+        run: >-
+          gcloud builds submit .
+          --project="$GCP_PROJECT_ID"
+          --tag="$IMAGE:$GITHUB_SHA"
+          --machine-type=e2-highcpu-8
+          --quiet
+
+      - name: Upload deployment files
+        run: >-
+          gcloud compute scp
+          apps/llm-gateway/deploy/Caddyfile
+          apps/llm-gateway/deploy/compose.production.yml
+          apps/llm-gateway/deploy/deploy.sh
+          "$GATEWAY_INSTANCE:/tmp/"
+          --project="$GCP_PROJECT_ID"
+          --zone="$GCP_ZONE"
+          --tunnel-through-iap
+          --quiet
+
+      - name: Deploy API and worker
+        run: |
+          gcloud compute ssh "$GATEWAY_INSTANCE" \
+            --project="$GCP_PROJECT_ID" \
+            --zone="$GCP_ZONE" \
+            --tunnel-through-iap \
+            --quiet \
+            --command="sudo install -m 0600 /tmp/Caddyfile /opt/llm-providers-gateway/Caddyfile && sudo install -m 0600 /tmp/compose.production.yml /opt/llm-providers-gateway/compose.production.yml && sudo install -m 0700 /tmp/deploy.sh /opt/llm-providers-gateway/deploy.sh && sudo env GATEWAY_IMAGE=$IMAGE:$GITHUB_SHA GATEWAY_HOST=$GATEWAY_HOST GCP_PROJECT_NUMBER=$GCP_PROJECT_NUMBER /opt/llm-providers-gateway/deploy.sh"
+
+      - name: Verify production
+        run: |
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 "https://$GATEWAY_HOST/healthz"
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 "https://$GATEWAY_HOST/readyz"

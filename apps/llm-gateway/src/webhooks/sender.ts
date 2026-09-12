@@ -13,7 +13,12 @@ export function signature(secret: string, eventId: string, timestamp: string, bo
 /** Only trusted HTTPS origins; unlike provider development URLs, callbacks never use HTTP. */
 export function destinationAllowed(value: string, origins: readonly string[]) {
   const url = new URL(value);
-  return url.protocol === "https:" && !url.username && !url.password && !url.hash && origins.includes(url.origin);
+  if (url.protocol !== "https:" || url.username || url.password || url.hash) return false;
+  return origins.some((origin) => {
+    if (!origin.startsWith("https://*.")) return url.origin === origin;
+    const suffix = origin.slice("https://*".length);
+    return !url.port && url.hostname.endsWith(suffix) && url.hostname.length > suffix.length;
+  });
 }
 
 export function createSender(encryptionKey: Buffer, origins: readonly string[], fetch: typeof globalThis.fetch = globalThis.fetch.bind(globalThis)): Send {

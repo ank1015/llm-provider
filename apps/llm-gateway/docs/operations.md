@@ -22,11 +22,12 @@ apply migrations automatically at API/worker startup.
 | `REQUEST_RETENTION_DAYS` | No | `1–365`; default `7`. Applies when future jobs become terminal. |
 | `WORKER_CONCURRENCY` | No | `1–128`; default `1`. Simultaneous LLM jobs per worker process. |
 | `PROVIDER_ALLOWED_ORIGINS` | No | Comma-separated canonical origins in addition to official provider origins. |
-| `WEBHOOK_ALLOWED_ORIGINS` | No | Comma-separated canonical HTTPS origins; empty denies callback sending. |
+| `WEBHOOK_ALLOWED_ORIGINS` | No | Comma-separated canonical HTTPS origins or `https://*.example.com` subdomain wildcards; empty denies callback sending. |
 
 Canonical origins have no path, trailing slash, credentials, query, or fragment.
 Provider origins require HTTPS except exact loopback HTTP for local development.
-Webhook origins always require HTTPS.
+Webhook origins always require HTTPS. A wildcard matches subdomains at any depth,
+but not the apex domain or nonstandard ports.
 
 The process exits on invalid configuration and reports field names without
 printing secret values. Environment files are not loaded automatically.
@@ -55,6 +56,30 @@ pnpm --filter @llm-providers/llm-gateway worker
 
 Both processes need the same database, encryption key, retention, and destination
 policy. The API can accept jobs without a worker, but they remain queued.
+
+### Automated production deployment
+
+Every push to `main` runs `.github/workflows/deploy-gateway.yml`. The workflow:
+
+1. installs dependencies and runs the build and non-live test suite;
+2. exchanges GitHub's short-lived OIDC token for the narrowly scoped Google
+   Cloud deployer identity, with no stored service-account key;
+3. builds an image in Cloud Build and tags it with the immutable Git commit SHA;
+4. uploads the deployment manifests to the VM through IAP-only SSH;
+5. pulls the image, applies pending migrations, replaces the API, verifies
+   readiness, and then replaces the worker; and
+6. verifies public liveness and database readiness over HTTPS.
+
+Deployments are serialized and are never cancelled by a newer push. The old API
+continues serving while migrations run. Replacing the single API container causes
+a brief connection window, normally a few seconds; clients should retry job
+submission with the same idempotency key. Queued jobs remain durable in Postgres.
+
+Replacing the worker aborts active provider calls. Their leases expire and the
+jobs become eligible for another attempt. Because provider execution is at least
+once, an interrupted call can rarely be repeated upstream and charged twice.
+Migrations must therefore remain backward-compatible with the currently running
+image. Use expand-and-contract migrations for destructive schema changes.
 
 ## Health checks
 
