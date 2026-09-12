@@ -1,4 +1,4 @@
-# LLM Gateway API Endpoints
+# API reference
 
 All endpoints in this document are implemented, alongside `GET /` for the
 application name. Run both the API and worker processes for job execution and
@@ -344,10 +344,10 @@ requests; a separate requests resource is unnecessary.
   are never API fields.
 
 The API process only persists jobs. Run the separate worker described in
-[README.md](./README.md#jobs-and-worker) to execute them. Retries allow up to three
+[Architecture](./architecture.md#worker-process) to execute them. Retries allow up to three
 attempts within 30 minutes from acceptance. Transport errors, timeouts, and
 selected transient HTTP errors use exponential jitter with applicable
-`Retry-After` hints. See the exact policy in [db_schema.md](./db_schema.md#implemented-job-policy).
+`Retry-After` hints. See the exact policy in [Database](./database.md#implemented-job-policy).
 
 Errors expose a safe gateway code, message, retry eligibility, and, for provider
 errors, provider/HTTP status when available. Raw provider errors and free-form
@@ -406,7 +406,7 @@ prevent result retrieval.
   ciphertext. Callback response bodies and raw transport errors are not stored.
 - Any 2xx acknowledges delivery; redirects are not followed. HTTP calls time out
   after ten seconds. Transient failures use bounded backoff and `Retry-After`;
-  see [README.md](./README.md#webhooks) for exact policy and signature verification.
+  see [Operations](./operations.md#webhook-receivers) for exact policy and signature verification.
 - The callback destination is frozen on event creation. Updating the user's URL
   affects future events only. Each claim uses the current signing secret.
   Disabled users receive no new claims, but disabling does not reset the retry
