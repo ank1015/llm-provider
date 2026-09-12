@@ -34,7 +34,7 @@ encryption_key="$(read_secret llm-providers-encryption-key)"
   printf 'ENCRYPTION_KEY=%s\n' "$encryption_key"
   printf 'PORT=3000\n'
   printf 'REQUEST_RETENTION_DAYS=7\n'
-  printf 'WORKER_CONCURRENCY=8\n'
+  printf 'WORKER_CONCURRENCY=12\n'
   printf 'PROVIDER_ALLOWED_ORIGINS=\n'
   printf 'WEBHOOK_ALLOWED_ORIGINS=https://*.acentric.dev\n'
 } > .env.new
