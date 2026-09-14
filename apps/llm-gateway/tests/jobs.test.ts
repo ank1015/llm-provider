@@ -12,6 +12,7 @@ import { jobAttempts, jobRequests, jobs, providerAccounts, userApiKeys, users, w
 import { createUser } from "../src/users/service.js";
 import { createAccount, updateAccount } from "../src/accounts/service.js";
 import { createExecutor } from "../src/jobs/provider.js";
+import { JobEvents, startJobEventListener } from "../src/jobs/events.js";
 import { claimJob, completeClaim, renewClaim, runOnce, runWorker } from "../src/jobs/worker.js";
 import { cleanupRequests } from "../src/jobs/retention.js";
 
@@ -19,7 +20,10 @@ const url = process.env.TEST_DATABASE_URL;
 if (!url) throw new Error("TEST_DATABASE_URL must point to a disposable PostgreSQL database.");
 const { db, pool } = createDatabase(url);
 const config = { adminApiKey: randomBytes(32).toString("hex"), encryptionKey: randomBytes(32) };
-const app = createApp(db, config);
+const eventController = new AbortController();
+const jobEvents = new JobEvents();
+let eventListener: Promise<void>;
+let app: ReturnType<typeof createApp>;
 type User = Awaited<ReturnType<typeof createUser>>;
 let first: User;
 let second: User;
@@ -66,8 +70,16 @@ async function until(check: () => Promise<boolean>) {
   }
 }
 
-before(async () => { await migrate(db, { migrationsFolder: fileURLToPath(new URL("../migrations", import.meta.url)) }); });
-after(async () => { await pool.end(); });
+before(async () => {
+  await migrate(db, { migrationsFolder: fileURLToPath(new URL("../migrations", import.meta.url)) });
+  ({ completed: eventListener } = await startJobEventListener(pool, jobEvents, eventController.signal));
+  app = createApp(db, config, jobEvents);
+});
+after(async () => {
+  eventController.abort();
+  await eventListener;
+  await pool.end();
+});
 
 describe("jobs API and worker", () => {
   beforeEach(async () => {
@@ -107,6 +119,31 @@ describe("jobs API and worker", () => {
     for (const secret of ["test-provider-key", "requestHash", "leaseToken", "secretsEncrypted"]) assert.ok(!text.includes(secret));
   });
 
+  it("waits for terminal state without holding the result in the webhook", async () => {
+    const job = await submit();
+    const waiting = Promise.resolve(request(`/v1/jobs/${job.id}/wait?timeoutMs=2000`)).then(async (result) => {
+      assert.equal(result.status, 200);
+      return result.json();
+    });
+    await sleep(20);
+    const result = response();
+    await runOnce(db, async () => result, signal());
+    const completed = await waiting;
+    assert.equal(completed.status, "succeeded");
+    assert.deepEqual(completed.response, result);
+
+    const event = (await events(job.id))[0]!;
+    assert.deepEqual(Object.keys(event.payload).sort(), ["completedAt", "eventId", "jobId", "type"]);
+    assert.equal(event.payload.jobId, job.id);
+    assert.equal(event.payload.type, "job.succeeded");
+
+    const queued = await submit();
+    const timed = await (await request(`/v1/jobs/${queued.id}/wait?timeoutMs=20`)).json();
+    assert.equal(timed.status, "queued");
+    assert.equal((await request(`/v1/jobs/${randomUUID()}/wait?timeoutMs=20`)).status, 404);
+    assert.equal((await request(`/v1/jobs/${queued.id}/wait?timeoutMs=0`)).status, 400);
+  });
+
   it("serializes concurrent equal submissions and rejects conflicting fingerprints", async () => {
     const input = fresh();
     const results = await Promise.all(Array.from({ length: 6 }, () => submit(input)));
@@ -138,7 +175,7 @@ describe("jobs API and worker", () => {
     const details = await (await request(`/v1/jobs/${job.id}`)).json();
     assert.equal(details.status, "succeeded");
     assert.deepEqual(details.response, result);
-    assert.deepEqual((await events(job.id))[0]!.payload.response, result);
+    assert.deepEqual(Object.keys((await events(job.id))[0]!.payload).sort(), ["completedAt", "eventId", "jobId", "type"]);
     const listing = await request("/v1/jobs");
     assert.equal(listing.status, 200);
     assert.deepEqual((await listing.json()).data[0].usage, result.usage);
@@ -185,11 +222,12 @@ describe("jobs API and worker", () => {
   it("authenticates and isolates every endpoint and continuation by user", async () => {
     const job = await submit();
     for (const [method, path] of [["GET", "/v1/jobs"], ["POST", "/v1/jobs"], ["GET", `/v1/jobs/${job.id}`],
-      ["GET", `/v1/jobs/${job.id}/attempts`], ["POST", `/v1/jobs/${job.id}/cancel`]]) {
+      ["GET", `/v1/jobs/${job.id}/wait?timeoutMs=1`], ["GET", `/v1/jobs/${job.id}/attempts`], ["POST", `/v1/jobs/${job.id}/cancel`]]) {
       assert.equal((await app.request(path!, { method: method! })).status, 401);
       assert.equal((await request(path!, method!, undefined, config.adminApiKey)).status, 401);
     }
-    for (const [method, path] of [["GET", `/v1/jobs/${job.id}`], ["GET", `/v1/jobs/${job.id}/attempts`], ["POST", `/v1/jobs/${job.id}/cancel`]])
+    for (const [method, path] of [["GET", `/v1/jobs/${job.id}`], ["GET", `/v1/jobs/${job.id}/wait?timeoutMs=1`],
+      ["GET", `/v1/jobs/${job.id}/attempts`], ["POST", `/v1/jobs/${job.id}/cancel`]])
       assert.equal((await request(path!, method!, undefined, second.key.secret)).status, 404);
     assert.deepEqual((await (await request("/v1/jobs", "GET", undefined, second.key.secret)).json()).data, []);
     assert.equal((await request("/v1/jobs", "POST", fresh(), second.key.secret)).status, 404);
@@ -239,7 +277,9 @@ describe("jobs API and worker", () => {
     assert.equal(callback.length, 1);
     assert.equal(callback[0]!.callbackUrl, "https://example.com/new");
     assert.equal(callback[0]!.payload.eventId, callback[0]!.id);
-    assert.deepEqual(callback[0]!.payload.response, result);
+    assert.deepEqual(Object.keys(callback[0]!.payload).sort(), ["completedAt", "eventId", "jobId", "type"]);
+    assert.equal(callback[0]!.payload.jobId, job.id);
+    assert.equal(callback[0]!.payload.type, "job.succeeded");
     assert.equal(callback[0]!.status, "pending");
     const serialized = await (await request(`/v1/jobs/${job.id}/attempts`)).json();
     assert.equal(serialized.data[0].inputTokens, "10");
@@ -250,7 +290,10 @@ describe("jobs API and worker", () => {
     const job = await submit();
     const item = await claim();
     // A duplicate event forces the final transaction to fail its unique constraint.
-    await db.insert(webhookDeliveries).values({ jobId: job.id, userId: first.user.id, eventType: "job.failed", callbackUrl: first.user.callbackUrl, payload: {} });
+    const eventId = randomUUID();
+    await db.insert(webhookDeliveries).values({ id: eventId, jobId: job.id, userId: first.user.id,
+      eventType: "job.failed", callbackUrl: first.user.callbackUrl,
+      payload: { eventId, type: "job.failed", jobId: job.id, completedAt: new Date().toISOString() } });
     await assert.rejects(completeClaim(db, item, { response: response() }));
     assert.equal((await stored(job.id)).status, "running");
     assert.equal((await attempts(job.id))[0]!.status, "running");
@@ -534,7 +577,8 @@ describe("jobs API and worker", () => {
   it("does not dispatch a provider call when shutdown arrives during a pending claim", { timeout: 10_000 }, async () => {
     const job = await submit();
     const controller = new AbortController();
-    const clients = await Promise.all(Array.from({ length: pool.options.max! }, () => pool.connect()));
+    // The terminal-event listener owns one pool connection for the process lifetime.
+    const clients = await Promise.all(Array.from({ length: pool.options.max! - 1 }, () => pool.connect()));
     const running = runOnce(db, async () => { assert.fail("Shutdown must prevent provider dispatch"); }, controller.signal);
     try {
       await until(async () => pool.waitingCount > 0);
