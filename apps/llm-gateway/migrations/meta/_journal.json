@@ -43,6 +43,13 @@
       "when": 1789194365644,
       "tag": "0005_lossless_payloads",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789371283578,
+      "tag": "0006_lightweight_webhook_events",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,7 @@ import {
   bigint, boolean, check, customType, foreignKey, index, integer, json, jsonb,
   numeric, pgTable, text, timestamp, unique, uuid,
 } from "drizzle-orm/pg-core";
+import type { TerminalJobEvent } from "../jobs/events.js";
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => "bytea",
@@ -147,7 +148,7 @@ export const webhookDeliveries = pgTable("webhook_deliveries", {
   userId: uuid("user_id").notNull(),
   eventType: text("event_type", { enum: ["job.succeeded", "job.failed", "job.cancelled"] }).notNull(),
   callbackUrl: text("callback_url").notNull(),
-  payload: json("payload").$type<Record<string, unknown>>().notNull(),
+  payload: json("payload").$type<TerminalJobEvent>().notNull(),
   status: text("status", { enum: ["pending", "delivering", "retry_wait", "delivered", "failed"] }).notNull().default("pending"),
   retryFromAttempt: integer("retry_from_attempt").notNull().default(1),
   retryStartedAt: time("retry_started_at").notNull().defaultNow(),
@@ -163,6 +164,13 @@ export const webhookDeliveries = pgTable("webhook_deliveries", {
   check("webhook_deliveries_retry_check", sql`${t.retryFromAttempt} > 0`),
   check("webhook_deliveries_delivered_check", sql`${t.status} <> 'delivered' or ${t.deliveredAt} is not null`),
   check("webhook_deliveries_lease_check", sql`(${t.leaseToken} is null) = (${t.leaseExpiresAt} is null)`),
+  check("webhook_deliveries_payload_check", sql`json_typeof(${t.payload}) = 'object'
+    and ${t.payload}::jsonb ?& array['eventId', 'type', 'jobId', 'completedAt']
+    and ${t.payload}::jsonb - array['eventId', 'type', 'jobId', 'completedAt'] = '{}'::jsonb
+    and ${t.payload}->>'eventId' = ${t.id}::text
+    and ${t.payload}->>'type' = ${t.eventType}
+    and ${t.payload}->>'jobId' = ${t.jobId}::text
+    and json_typeof(${t.payload}->'completedAt') = 'string'`),
   index("webhook_deliveries_user_created_idx").on(t.userId, t.createdAt.desc(), t.id.desc()),
   index("webhook_deliveries_runnable_idx").on(t.nextAttemptAt, t.id).where(sql`${t.status} in ('pending', 'retry_wait')`),
   index("webhook_deliveries_expired_lease_idx").on(t.leaseExpiresAt).where(sql`${t.status} = 'delivering'`),
