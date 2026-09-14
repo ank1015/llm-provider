@@ -94,7 +94,7 @@ describe("gateway database", () => {
       create temporary table webhook_deliveries (payload jsonb) on commit drop`);
     const request = { messages: [], providerOptions: { nested: ["preserved"] } };
     const response = { message: { content: [{ type: "future_item" }] }, usage: { input: 12, output: 3 } };
-    const payload = { eventId: "unchanged", response };
+    const payload = { eventId: "unchanged", nested: { value: "preserved" } };
     await client.query("insert into job_requests values ($1)", [request]);
     await client.query("insert into jobs values ($1), (null)", [response]);
     await client.query("insert into webhook_deliveries values ($1)", [payload]);
@@ -104,6 +104,24 @@ describe("gateway database", () => {
       [{ response, usage: response.usage }, { response: null, usage: null }]);
     assert.deepEqual((await client.query("select payload from webhook_deliveries")).rows, [{ payload }]);
     assert.equal((await client.query("select pg_typeof(request)::text as type from job_requests")).rows[0].type, "json");
+  });
+
+  it("normalizes existing webhook events to the canonical lightweight payload", async () => {
+    // Transaction-local tables shadow the real ones, exercising the data migration on legacy rows.
+    await client.query(`create temporary table jobs (id uuid primary key, finished_at timestamptz not null) on commit drop;
+      create temporary table webhook_deliveries (id uuid primary key, job_id uuid not null, event_type text not null,
+        payload json not null) on commit drop`);
+    const deliveryId = randomUUID();
+    const legacyJobId = randomUUID();
+    await client.query("insert into jobs values ($1, $2)", [legacyJobId, "2026-01-02T03:04:05.678Z"]);
+    await client.query("insert into webhook_deliveries values ($1, $2, 'job.succeeded', $3)",
+      [deliveryId, legacyJobId, { eventId: deliveryId, type: "job.succeeded", jobId: legacyJobId,
+        completedAt: "2026-01-02T03:04:05.678Z", response: { message: "legacy" } }]);
+    await client.query(await readFile(new URL("../migrations/0006_lightweight_webhook_events.sql", import.meta.url), "utf8"));
+    assert.deepEqual((await client.query("select payload from webhook_deliveries")).rows[0].payload,
+      { eventId: deliveryId, type: "job.succeeded", jobId: legacyJobId, completedAt: "2026-01-02T03:04:05.678Z" });
+    await expectConstraint(`update webhook_deliveries
+      set payload = (payload::jsonb || '{"response": {}}'::jsonb)::json where id = $1`, [deliveryId], "23514");
   });
 
   it("round-trips encrypted bytes, native JSON, timestamps, and defaults through Drizzle", async () => {
@@ -188,11 +206,15 @@ describe("gateway database", () => {
   });
 
   it("enforces one owned delivery per job and preserves redelivery attempts", async () => {
-    const insert = `insert into webhook_deliveries (user_id, job_id, event_type, callback_url, payload)
-      values ($1, $2, 'job.succeeded', 'https://example.com/callback', '{}') returning id`;
-    await expectConstraint(insert, [otherUserId, jobId], "23503");
-    const deliveryId = (await client.query(insert, [userId, jobId])).rows[0].id;
-    await expectConstraint(insert, [userId, jobId], "23505");
+    const deliveryId = randomUUID();
+    const payload = { eventId: deliveryId, type: "job.succeeded", jobId, completedAt: new Date().toISOString() };
+    const insert = `insert into webhook_deliveries (id, user_id, job_id, event_type, callback_url, payload)
+      values ($3, $1, $2, 'job.succeeded', 'https://example.com/callback', $4) returning id`;
+    await expectConstraint(insert, [otherUserId, jobId, deliveryId, payload], "23503");
+    assert.equal((await client.query(insert, [userId, jobId, deliveryId, payload])).rows[0].id, deliveryId);
+    await expectConstraint(insert, [userId, jobId, deliveryId, payload], "23505");
+    await expectConstraint(`update webhook_deliveries
+      set payload = (payload::jsonb || '{"error": {}}'::jsonb)::json where id = $1`, [deliveryId], "23514");
     await expectConstraint("update webhook_deliveries set status = 'delivered' where id = $1", [deliveryId], "23514");
     await client.query("update webhook_deliveries set status = 'delivered', delivered_at = now() where id = $1", [deliveryId]);
     await client.query("update webhook_deliveries set status = 'pending' where id = $1", [deliveryId]);
