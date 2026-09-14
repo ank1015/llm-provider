@@ -9,9 +9,12 @@ import { retryAfter, retryDelay } from "../src/webhooks/policy.js";
 
 const key = randomBytes(32);
 const secret = "whsec_test-signing-secret";
+const deliveryId = randomUUID();
+const jobId = randomUUID();
 const delivery: typeof webhookDeliveries.$inferSelect = {
-  id: randomUUID(), userId: randomUUID(), jobId: randomUUID(), eventType: "job.succeeded",
-  callbackUrl: "https://callbacks.example.com/events", payload: { message: "Hello 世界", nested: { number: 1 } },
+  id: deliveryId, userId: randomUUID(), jobId, eventType: "job.succeeded",
+  callbackUrl: "https://callbacks.example.com/events",
+  payload: { eventId: deliveryId, type: "job.succeeded", jobId, completedAt: "2026-01-01T00:00:00.000Z" },
   status: "delivering", retryFromAttempt: 1, retryStartedAt: new Date(),
   nextAttemptAt: new Date(), createdAt: new Date(), deliveredAt: null, leaseToken: null, leaseExpiresAt: null,
 };

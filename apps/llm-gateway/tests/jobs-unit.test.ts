@@ -4,7 +4,8 @@ import { it } from "node:test";
 import { LlmError } from "@llm-providers/contracts";
 import { loadConfig } from "../src/config.js";
 import { fingerprint } from "../src/jobs/service.js";
-import { submission } from "../src/jobs/validation.js";
+import { JobEvents } from "../src/jobs/events.js";
+import { submission, waitQuery } from "../src/jobs/validation.js";
 import { isRetryable, retryDelay, serializeError } from "../src/jobs/policy.js";
 import { validateDestination } from "../src/jobs/provider.js";
 
@@ -18,6 +19,34 @@ it("normalizes fresh defaults and fingerprints object order but preserves array 
     fingerprint(submission.parse({ ...input, providerOptions: { b: { d: 3, c: 2 }, a: 1 } })));
   assert.notEqual(fingerprint(submission.parse({ ...input, providerOptions: { order: [1, 2] } })),
     fingerprint(submission.parse({ ...input, providerOptions: { order: [2, 1] } })));
+});
+
+it("validates bounded job waits and wakes only subscribers for the completed job", async () => {
+  assert.equal(waitQuery.parse({}).timeoutMs, 300_000);
+  assert.equal(waitQuery.parse({ timeoutMs: "125" }).timeoutMs, 125);
+  for (const timeoutMs of ["0", "300001", "1.5", "invalid"]) assert.ok(!waitQuery.safeParse({ timeoutMs }).success);
+  assert.ok(!waitQuery.safeParse({ timeoutMs: "10", extra: "field" }).success);
+
+  const events = new JobEvents();
+  const first = events.subscribe("first");
+  const second = events.subscribe("second");
+  const started = Date.now();
+  events.notify("first");
+  await first.wait(1_000);
+  assert.ok(Date.now() - started < 100);
+  const timed = Date.now();
+  await second.wait(20);
+  assert.ok(Date.now() - timed >= 10);
+  first.close();
+  second.close();
+
+  const current = events.subscribe("current");
+  events.close();
+  await current.wait(1_000);
+  const afterClose = events.subscribe("after-close");
+  await afterClose.wait(1_000);
+  current.close();
+  afterClose.close();
 });
 
 it("retains arbitrary native assistant items, custom data, and JSON keys", () => {
