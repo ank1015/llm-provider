@@ -6,6 +6,7 @@ import { jobs, jobRequests, jobAttempts, providerAccounts, type StoredRequest } 
 import { ApiError, notFound } from "../errors.js";
 import { page, type PageInput } from "../pagination.js";
 import { finishJob, isTerminal, type Job } from "./lifecycle.js";
+import type { JobEvents } from "./events.js";
 import { DEFAULT_RETENTION_DAYS, MAX_REQUEST_BYTES } from "./policy.js";
 import { validateDestination, validateModel } from "./provider.js";
 import type { Submission } from "./validation.js";
@@ -78,6 +79,26 @@ export async function getJob(db: Database, userId: string, id: string) {
     .leftJoin(jobRequests, eq(jobs.id, jobRequests.jobId)).where(owned(userId, id));
   if (!job) notFound("Job");
   return { ...job, requestStatus: job.request === null ? "expired" : "retained" };
+}
+
+async function getJobStatus(db: Database, userId: string, id: string) {
+  const [job] = await db.select({ status: jobs.status }).from(jobs).where(owned(userId, id));
+  if (!job) notFound("Job");
+  return job.status;
+}
+
+/** Wait without retaining a transaction or database connection. */
+export async function waitForJob(db: Database, events: JobEvents, userId: string, id: string,
+  timeoutMs: number, signal?: AbortSignal) {
+  if (isTerminal(await getJobStatus(db, userId, id))) return getJob(db, userId, id);
+  const subscription = events.subscribe(id);
+  try {
+    // Close the read/subscribe race before blocking on the completion hint.
+    if (!isTerminal(await getJobStatus(db, userId, id))) await subscription.wait(timeoutMs, signal);
+    return getJob(db, userId, id);
+  } finally {
+    subscription.close();
+  }
 }
 
 type Filters = PageInput & { accountId?: string; provider?: Provider; modelId?: string; status?: Job["status"]; from?: string; to?: string; idempotencyKey?: string };

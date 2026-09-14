@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantResponse } from "@llm-providers/contracts";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Transaction } from "../db/client.js";
 import { jobs, jobRequests, users, webhookDeliveries } from "../db/schema.js";
+import { JOB_EVENT_CHANNEL, type TerminalJobEvent } from "./events.js";
 
 export type Job = typeof jobs.$inferSelect;
 export type Outcome = { status: "succeeded"; response: AssistantResponse }
@@ -25,7 +26,8 @@ export async function finishJob(tx: Transaction, job: Job, outcome: Outcome, ret
   const type = `job.${outcome.status}` as const;
   await tx.insert(webhookDeliveries).values({
     id: eventId, jobId: job.id, userId: job.userId, eventType: type, callbackUrl: user!.callbackUrl,
-    payload: { eventId, type, jobId: job.id, completedAt: now.toISOString(),
-      ...(response ? { response } : {}), ...(error ? { error } : {}) },
+    payload: { eventId, type, jobId: job.id, completedAt: now.toISOString() } satisfies TerminalJobEvent,
   });
+  // PostgreSQL delivers transactional notifications only after this completion commits.
+  await tx.execute(sql`select pg_notify(${JOB_EVENT_CHANNEL}, ${job.id})`);
 }

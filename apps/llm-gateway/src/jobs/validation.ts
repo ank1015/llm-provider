@@ -2,6 +2,7 @@ import type { Message, ToolDefinition } from "@llm-providers/contracts";
 import { z } from "zod";
 import { provider } from "../accounts/validation.js";
 import { pageQuery } from "../pagination.js";
+import { MAX_WAIT_MS } from "./policy.js";
 
 const fields = z.record(z.string(), z.unknown());
 const base = { id: z.string().optional(), timestamp: z.number().optional(), metadata: fields.optional() };
@@ -43,6 +44,9 @@ export const submission = z.union([
 ]);
 export type Submission = z.infer<typeof submission>;
 export const status = z.enum(["queued", "running", "retry_wait", "succeeded", "failed", "cancelled"]);
+export const waitQuery = z.strictObject({
+  timeoutMs: z.coerce.number().int().min(1).max(MAX_WAIT_MS).default(MAX_WAIT_MS),
+});
 export const listQuery = pageQuery.extend({
   accountId: z.uuid().optional(), provider: provider.optional(), modelId: z.string().max(300).optional(),
   status: status.optional(), from: z.iso.datetime().optional(), to: z.iso.datetime().optional(),
