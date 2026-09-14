@@ -19,6 +19,9 @@ provider/model catalogs and owned-account model lists without new tables.
 tables or migrations. Migration
 `0003_webhook_retry_cycles.sql` adds two cycle fields without adding tables.
 `0004_usage_attempt_index.sql` adds an attempt-time reporting index.
+`0005_lossless_payloads.sql` preserves provider-native JSON and separates usage.
+`0006_lightweight_webhook_events.sql` reduces stored terminal events to canonical
+completion metadata and enforces that shape.
 
 The schema has **eight tables**. `job_requests` keeps large request payloads
 separate so they can expire independently
@@ -352,9 +355,9 @@ Separating this table gives input its own lifecycle and keeps frequently read
 job metadata separate from large, short-lived request data. Job-list queries
 should not load payloads or full responses.
 
-Full responses and webhook payloads also need retention policies, but their
-periods are not yet decided. Request expiry must not implicitly remove them or
-break pending callback delivery/result retrieval.
+Full responses and lightweight webhook events also need retention policies, but
+their periods are not yet decided. Request expiry must not implicitly remove them
+or break pending callback delivery/result retrieval.
 
 ## 6. `job_attempts`
 
@@ -407,7 +410,7 @@ there is no separate events/outbox table initially.
 | `user_id` | `uuid` | Owning user. |
 | `event_type` | `text` | `job.succeeded`, `job.failed`, or `job.cancelled`. |
 | `callback_url` | `text` | Destination captured for this event. |
-| `payload` | `json` | Stable event body containing the result or final error. |
+| `payload` | `json` | Stable lightweight event body containing job identity and completion metadata. |
 | `status` | `text` | `pending`, `delivering`, `retry_wait`, `delivered`, or `failed`. |
 | `retry_from_attempt` | `integer` | First lifetime attempt number in the current retry cycle; positive, default 1. |
 | `retry_started_at` | `timestamptz` | Start of the current 24-hour retry window; defaults to event creation time. |
@@ -424,8 +427,9 @@ Constraints and behavior:
 - Save the terminal result, finalize request expiry, and insert the pending
   delivery in the same transaction. A crash must not leave a completed job
   without its recoverable notification.
-- Event payload includes the event ID, job ID, type, completion timestamp, and
-  `AssistantResponse` or serialized final error. It does not copy request input.
+- Event payload is `{ eventId, type, jobId, completedAt }`. Responses, errors,
+  request input, credentials, and account data are retrieved from their owning
+  resources rather than copied into delivery records.
 - Deliveries are signed using the current user webhook secret at claim time.
   Rotation affects future claims; already claimed calls may use the previous
   secret. Receivers handle that brief overlap; old secrets are not retained.
@@ -611,11 +615,13 @@ additional charges. Cancellation is also best-effort, not a billing rollback.
   Lease loss or renewal failure also aborts the call. These are not user
   cancellation events. Explicit cancellation is checked on heartbeat and
   finalization; terminal results remain immutable.
-- Completion, input expiry, and one pending callback event are one transaction.
+- Completion, input expiry, one pending callback event, and a transactional
+  PostgreSQL terminal-job notification are one transaction.
   Callback URL is captured at completion, event ID equals delivery ID, and
-  payload is `{ eventId, type, jobId, completedAt, response? | error? }`.
-  Cancelled events have neither response nor error. An independent webhook
-  consumer claims pending events; job completion does not wait for delivery.
+  payload is `{ eventId, type, jobId, completedAt }` for every terminal status.
+  An independent webhook consumer claims pending events; job completion does not
+  wait for delivery. The notification wakes bounded API waiters, which re-read
+  the authoritative job and do not hold a transaction or pool connection while idle.
 - HTTP submission checks its normalized fingerprint under a per-user/key
   transaction advisory lock, backed by the existing unique constraint.
   Continuation locks the parent row while copying input. Cleanup locks the
