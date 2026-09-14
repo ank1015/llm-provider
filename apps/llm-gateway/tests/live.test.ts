@@ -9,7 +9,7 @@ for (const provider of ["openai", "fireworks"] as const) {
     const apiKey = process.env[provider === "openai" ? "LIVE_OPENAI_API_KEY" : "LIVE_FIREWORKS_API_KEY"];
     if (!apiKey) throw new Error(`Missing live ${provider} credential in the test runner environment.`);
     let secret = "";
-    const received: { eventId: string; jobId: string; response?: unknown; error?: unknown }[] = [];
+    const received: { eventId: string; type: string; jobId: string; completedAt: string }[] = [];
     let signatureError = false;
     const stack = await startStack(async (req, res) => {
       let raw = "";
@@ -41,12 +41,12 @@ for (const provider of ["openai", "fireworks"] as const) {
       stack.worker();
       const submitted = await request("/v1/jobs", token, "POST", input, 202);
       assert.equal((await request("/v1/jobs", token, "POST", input, 202)).id, submitted.id);
-      const finish = (id: string) => until(() => request(`/v1/jobs/${id}`, token),
+      const finish = (id: string) => until(() => request(`/v1/jobs/${id}/wait?timeoutMs=5000`, token),
         (job) => ["succeeded", "failed"].includes(job.status), 145_000);
       const job = await finish(submitted.id);
       await until(async () => received.some((event) => event.jobId === job.id), Boolean);
       assert.equal(signatureError, false);
-      assert.deepEqual(received.find((event) => event.jobId === job.id)?.response ?? null, job.response);
+      assert.deepEqual(Object.keys(received.find((event) => event.jobId === job.id)!).sort(), ["completedAt", "eventId", "jobId", "type"]);
       if (job.status !== "succeeded") {
         // Gateway errors are sanitized; do not print provider bodies, account objects, or keys.
         throw new Error(`${provider} live job failed: ${job.error?.code}, HTTP ${job.error?.httpStatus ?? "unavailable"}. Signed failure callback received.`);
