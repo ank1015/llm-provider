@@ -5,7 +5,7 @@ import type { Provider } from "@llm-providers/contracts";
 import { startStack, until } from "./helpers/stack.js";
 
 it("runs the compiled gateway end to end with all three provider protocols", { timeout: 120_000 }, async () => {
-  const callbacks: { eventId: string; jobId: string; response?: unknown }[] = [];
+  const callbacks: { eventId: string; type: string; jobId: string; completedAt: string }[] = [];
   const upstream: { provider: string; body: Record<string, unknown> }[] = [];
   const receiverErrors: unknown[] = [];
   let webhookSecret = "";
@@ -111,7 +111,7 @@ it("runs the compiled gateway end to end with all three provider protocols", { t
     const cancelled = await request("/v1/jobs", token, "POST", fresh("cancel"), 202);
     assert.equal((await request(`/v1/jobs/${cancelled.id}/cancel`, token, "POST")).status, "cancelled");
     let worker = stack.worker();
-    const finish = (id: string) => until(() => request(`/v1/jobs/${id}`, token),
+    const finish = (id: string) => until(() => request(`/v1/jobs/${id}/wait?timeoutMs=5000`, token),
       (job) => ["succeeded", "failed", "cancelled"].includes(job.status));
     const parents: string[] = [];
     for (const [provider, account] of accounts) {
@@ -153,7 +153,8 @@ it("runs the compiled gateway end to end with all three provider protocols", { t
       (result) => result.data.length === 8 && result.data.every((item: { status: string }) => item.status === "delivered"));
     const delivery = deliveries.data.find((item: { jobId: string }) => item.jobId === parents[0]);
     const details = await request(`/v1/webhook-deliveries/${delivery.id}`, token);
-    assert.deepEqual(details.payload.response, (await request(`/v1/jobs/${parents[0]}`, token)).response);
+    assert.deepEqual(Object.keys(details.payload).sort(), ["completedAt", "eventId", "jobId", "type"]);
+    assert.equal(details.payload.jobId, parents[0]);
     const priorCallbacks = callbacks.filter((event) => event.eventId === delivery.id).length;
     await request(`/v1/webhook-deliveries/${delivery.id}/redeliver`, token, "POST", undefined, 202);
     await until(() => request(`/v1/webhook-deliveries/${delivery.id}`, token), (result) => result.status === "delivered");
