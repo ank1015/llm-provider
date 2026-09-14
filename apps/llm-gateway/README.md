@@ -59,14 +59,15 @@ See [.env.example](./.env.example) for a complete template and
 - Admin endpoints register and manage users and API keys.
 - User endpoints manage settings and provider accounts.
 - Catalog endpoints expose the provider packages' model catalogs.
-- Job endpoints submit, inspect, list, continue, and cancel LLM work.
+- Job endpoints submit, inspect, wait for, list, continue, and cancel LLM work.
 - Webhook endpoints inspect delivery history and request redelivery.
 - Usage endpoints report token and estimated cost data.
 - `/healthz` and `/readyz` provide liveness and database readiness.
 
 Every user-scoped request uses `Authorization: Bearer <user-key>`. Job submission
-returns `202` after durable acceptance; retrieve the result by job ID or receive
-the terminal webhook.
+returns `202` after durable acceptance. Retrieve the result by job ID, wait up to
+five minutes for terminal state, or use the lightweight terminal webhook as a wake-up
+signal and then retrieve the authoritative job.
 
 ## Documentation
 

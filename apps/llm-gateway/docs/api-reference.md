@@ -220,6 +220,7 @@ No new tables, migrations, configuration, or worker tasks are needed.
 | POST | `/v1/jobs` | Submit a fresh request or continue a previous job; return `202 Accepted` with a job ID. |
 | GET | `/v1/jobs` | List recent jobs and metadata. |
 | GET | `/v1/jobs/:jobId` | Get job status and the stored result or final error. |
+| GET | `/v1/jobs/:jobId/wait` | Wait briefly for terminal state, then return the same job representation. |
 | GET | `/v1/jobs/:jobId/attempts` | Inspect provider attempts, timings, and errors. |
 | POST | `/v1/jobs/:jobId/cancel` | Request cancellation of queued, running, or retry-waiting work. |
 
@@ -280,8 +281,8 @@ provider-specific continuation feature and no additional endpoint.
 ### Acceptance, idempotency, and retrieval
 
 Acceptance means the job has been durably recorded. The eventual
-`AssistantResponse` is available through job lookup and the callback, not in the
-initial submission response.
+`AssistantResponse` is available through immediate or bounded-wait job lookup,
+not in the initial submission response or webhook.
 
 Idempotency is scoped to `userId + idempotencyKey`. Fingerprint the normalized
 submission: fresh input/account for fresh requests, or `previousJobId` plus
@@ -326,6 +327,12 @@ requests; a separate requests resource is unnecessary.
   `requestExpiresAt`, and `requestStatus: "retained" | "expired"`. Unavailable
   response/error/request fields are null. Expired input is hidden even before
   cleanup runs; after deletion its expiry timestamp is also unavailable.
+- GET wait accepts only `timeoutMs`, an integer from 1 through 300000 that defaults
+  to 300000. It returns immediately when the job is already terminal. Otherwise it
+  waits for terminal state or the timeout, then returns exactly the GET-detail
+  representation. Timeout is not a job failure: a still-running job is returned
+  with its current nonterminal status. Waiters hold no transaction or pooled
+  database connection. Clients may repeat the request after a nonterminal result.
 - GET attempts returns `{ data }`, in attempt-number order. There are at most
   three attempts. Fields include config version, status, timestamps, provider
   response ID/resolved model, error, duration, token counts, and cost breakdown.
@@ -372,9 +379,10 @@ consumer; a pending callback does not delay result retrieval.
 | POST | `/v1/webhook-deliveries/:deliveryId/redeliver` | Schedule another delivery of the same event. |
 
 The gateway sends signed terminal events to the user's registered callback URL.
-Events include a stable event ID, job ID, event type, completion timestamp, and
-the `AssistantResponse` or serialized final error. The callback endpoint belongs
-to the user's application, not this gateway.
+Events include only a stable event ID, job ID, event type, and completion timestamp.
+The callback endpoint belongs to the user's application, not this gateway. After
+durably recording and acknowledging an event, retrieve the authoritative response
+or error from the job endpoint.
 
 Delivery retries are independent of provider retries. Redelivery preserves the
 event ID and never reruns the LLM request. Consumers must handle duplicate
@@ -393,6 +401,9 @@ prevent result retrieval.
   `attemptLimit` (1–100, default 50) and the returned numeric `attemptCursor`
   for earlier attempts. Each attempt has `id`, `deliveryId`, `attemptNumber`,
   `startedAt`, `finishedAt`, `httpStatus`, and a safe `error` or null.
+- The immutable payload is `{ eventId, type, jobId, completedAt }` for successful,
+  failed, and cancelled jobs. It never embeds an `AssistantResponse`, job error,
+  request, credentials, or account data.
 - POST redeliver takes no body. Delivered/failed events return `202` with the
   metadata record in `pending` status; their eight-attempt/24-hour retry budget
   restarts without deleting history. Concurrent requeues serialize. Pending,
