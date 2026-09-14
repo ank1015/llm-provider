@@ -17,6 +17,7 @@ flowchart LR
   Admin[Gateway administrator] --> API[Hono API process]
   Client[User application] --> API
   API --> DB[(PostgreSQL)]
+  DB -- Terminal job notification --> API
   Worker[Worker process] --> DB
   Worker --> Providers[OpenAI / ChatGPT / Fireworks]
   Worker --> Callback[User callback endpoint]
@@ -39,8 +40,13 @@ The API process:
 - authenticates administrators and users;
 - manages users, keys, provider accounts, and catalogs;
 - validates and durably accepts jobs;
-- exposes results, delivery history, and usage reports;
+- exposes immediate and bounded-wait result retrieval, delivery history, and usage reports;
 - never performs an LLM request inside the submission handler.
+
+One dedicated PostgreSQL connection listens for transactional terminal-job
+notifications and fans them out to wait requests in the API process. A waiter holds
+neither a database transaction nor a pool connection. Notifications only wake
+waiters; every response is read from authoritative job state in PostgreSQL.
 
 ### Worker process
 
@@ -91,8 +97,9 @@ sequenceDiagram
   W->>P: Provider request
   P-->>W: AssistantResponse or error
   W->>D: Finish/retry job and enqueue webhook atomically
+  D-->>A: Transactional terminal notification
   W->>H: Signed terminal event
-  C->>A: GET /v1/jobs/:id
+  C->>A: GET /v1/jobs/:id or /wait
   A->>D: Read owned result
   A-->>C: Job state and retained request/result
 ```
@@ -158,6 +165,15 @@ Terminal completion, request-expiry assignment, and webhook outbox insertion are
 one transaction. This prevents a committed terminal result without its callback
 event. Webhook delivery is at least once: receivers must verify the signature and
 deduplicate by stable event ID before processing.
+
+The same completion transaction emits a PostgreSQL notification after commit.
+Bounded wait requests use it for prompt wake-up, then read the job. The initial
+read, subscription, and second read close the completion race. A missed hint can
+delay a response until its wait timeout, but cannot hide or lose the stored result.
+
+Terminal webhooks deliberately contain identifiers and timestamps, not LLM output
+or errors. Consumers retrieve the job after durably accepting the event. This keeps
+delivery and inbox payloads small and makes PostgreSQL the only result authority.
 
 Callback failure never repeats the LLM job. Manual redelivery starts a new
 delivery retry cycle for the same immutable event.

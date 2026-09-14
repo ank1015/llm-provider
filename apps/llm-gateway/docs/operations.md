@@ -125,10 +125,12 @@ concurrency is approximately:
 worker process count × WORKER_CONCURRENCY
 ```
 
-The pool limit is ten connections per process. Provider calls release database
-connections while awaiting upstream I/O, so concurrency can exceed pool size;
-claim and completion queries queue at the pool. Scale PostgreSQL connection
-budgets with process count, not only execution-slot count.
+The pool limit is ten connections per process. The API reserves one connection
+for terminal-job notifications; wait requests themselves retain none. Provider
+calls release database connections while awaiting upstream I/O, so worker
+concurrency can exceed pool size; claim and completion queries queue at the pool.
+Scale PostgreSQL connection budgets with process count, not only execution-slot
+count.
 
 Before raising concurrency substantially, load-test:
 
@@ -157,8 +159,8 @@ therefore require an explicit maintenance window rather than competing with live
 traffic.
 
 Request input expires only after a job reaches a terminal state. Cleanup removes
-expired inputs in batches of 100. Responses, attempts, webhook payloads, job
-metadata, and idempotency records currently have no automatic retention policy.
+expired inputs in batches of 100. Responses, attempts, lightweight webhook payloads,
+job metadata, and idempotency records currently have no automatic retention policy.
 Capacity planning must include them.
 
 Continuation children store complete reconstructed snapshots, so storage grows
@@ -171,6 +173,7 @@ volume.
 SIGINT/SIGTERM:
 
 - stops API admission and closes its pool;
+- releases bounded job waiters and stops the dedicated terminal-job notification listener;
 - aborts active provider and webhook HTTP calls;
 - stops all execution, cleanup, and delivery loops;
 - leaves ambiguous in-flight claims to expire and recover;
