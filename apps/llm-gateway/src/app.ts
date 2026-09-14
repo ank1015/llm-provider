@@ -9,8 +9,13 @@ import { createWebhookRoutes } from "./webhooks/routes.js";
 import { createUsageRoutes } from "./usage/routes.js";
 import { createCatalogRoutes } from "./catalogs/routes.js";
 import { createHealthRoutes } from "./health.js";
+import { JobEvents } from "./jobs/events.js";
 
-export function createApp(db: Database, config: Pick<Config, "adminApiKey" | "encryptionKey"> & Partial<Pick<Config, "providerOrigins" | "requestRetentionDays">>) {
+export function createApp(
+  db: Database,
+  config: Pick<Config, "adminApiKey" | "encryptionKey"> & Partial<Pick<Config, "providerOrigins" | "requestRetentionDays">>,
+  events = new JobEvents(),
+) {
   const app = new Hono();
   app.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
@@ -33,7 +38,7 @@ export function createApp(db: Database, config: Pick<Config, "adminApiKey" | "en
   app.route("/v1/admin/users", routes.admin);
   app.route("/v1/me", routes.me);
   app.route("/v1/accounts", createAccountRoutes(db, config.encryptionKey));
-  app.route("/v1/jobs", createJobRoutes(db, config.providerOrigins, config.requestRetentionDays));
+  app.route("/v1/jobs", createJobRoutes(db, events, config.providerOrigins, config.requestRetentionDays));
   app.route("/v1/webhook-deliveries", createWebhookRoutes(db));
   app.route("/v1/usage", createUsageRoutes(db));
   return app;

@@ -6,10 +6,11 @@ import type { Database } from "../db/client.js";
 import { body, parse } from "../http.js";
 import { pagination } from "../pagination.js";
 import { DEFAULT_RETENTION_DAYS, MAX_REQUEST_BYTES } from "./policy.js";
-import { listQuery, submission } from "./validation.js";
+import type { JobEvents } from "./events.js";
+import { listQuery, submission, waitQuery } from "./validation.js";
 import * as service from "./service.js";
 
-export function createJobRoutes(db: Database, extraOrigins: readonly string[] = [], retentionDays = DEFAULT_RETENTION_DAYS) {
+export function createJobRoutes(db: Database, events: JobEvents, extraOrigins: readonly string[] = [], retentionDays = DEFAULT_RETENTION_DAYS) {
   const app = new Hono<UserEnv>();
   const uuid = z.uuid();
   app.use("*", userAuth(db), bodyLimit({ maxSize: MAX_REQUEST_BYTES,
@@ -21,6 +22,11 @@ export function createJobRoutes(db: Database, extraOrigins: readonly string[] = 
     return c.json(await service.listJobs(db, c.var.user.id, { ...filters, ...pagination(query) }));
   });
   app.get("/:jobId", async (c) => c.json(await service.getJob(db, c.var.user.id, parse(uuid, c.req.param("jobId")))));
+  app.get("/:jobId/wait", async (c) => {
+    const id = parse(uuid, c.req.param("jobId"));
+    const { timeoutMs } = parse(waitQuery, c.req.query());
+    return c.json(await service.waitForJob(db, events, c.var.user.id, id, timeoutMs, c.req.raw.signal));
+  });
   app.get("/:jobId/attempts", async (c) => c.json(await service.listAttempts(db, c.var.user.id, parse(uuid, c.req.param("jobId")))));
   app.post("/:jobId/cancel", async (c) => c.json(await service.cancelJob(db, c.var.user.id, parse(uuid, c.req.param("jobId")), retentionDays)));
   return app;

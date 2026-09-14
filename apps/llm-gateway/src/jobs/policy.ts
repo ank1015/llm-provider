@@ -2,6 +2,7 @@ import { LlmError } from "@llm-providers/contracts";
 import { ApiError } from "../errors.js";
 
 export const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
+export const MAX_WAIT_MS = 5 * 60 * 1000;
 export const MAX_ATTEMPTS = 3;
 export const JOB_TIMEOUT_MS = 30 * 60 * 1000;
 export const LEASE_MS = 60_000;
