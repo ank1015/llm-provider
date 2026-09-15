@@ -2,6 +2,7 @@ export { OPENAI_MODELS } from "./models.js";
 export type { OpenAiModelId } from "./models.js";
 export {
   buildResponseRequest,
+  CODEX_REMOTE_COMPACTION_V2_OPTION,
   CODEX_RESPONSES_LITE_OPTION,
   OPENAI_CUSTOM_ITEM_TAG,
 } from "./request.js";

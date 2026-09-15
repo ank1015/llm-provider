@@ -8,6 +8,7 @@ export type { ChatGptClientOptions } from "./config.js";
 export {
   buildResponseRequest,
   CHATGPT_CUSTOM_ITEM_TAG,
+  CODEX_REMOTE_COMPACTION_V2_OPTION,
   CODEX_RESPONSES_LITE_OPTION,
   DEFAULT_CHATGPT_INSTRUCTIONS,
 } from "./request.js";

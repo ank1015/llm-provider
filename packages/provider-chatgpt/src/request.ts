@@ -10,6 +10,7 @@ import { invalidRequest } from "./errors.js";
 
 export const CHATGPT_CUSTOM_ITEM_TAG = "chatgpt_custom_item";
 export const CODEX_RESPONSES_LITE_OPTION = "codex_responses_lite";
+export const CODEX_REMOTE_COMPACTION_V2_OPTION = "codex_remote_compaction_v2";
 export const DEFAULT_CHATGPT_INSTRUCTIONS = "You are a helpful assistant.";
 
 /** Builds the streaming Responses request body required by the ChatGPT backend. */
@@ -40,11 +41,18 @@ export function buildResponseRequest({
   if (responsesLite !== undefined && typeof responsesLite !== "boolean") {
     throw invalidRequest(`providerOptions.${CODEX_RESPONSES_LITE_OPTION} must be a boolean.`);
   }
+  const remoteCompaction = options[CODEX_REMOTE_COMPACTION_V2_OPTION];
+  if (remoteCompaction !== undefined && typeof remoteCompaction !== "boolean") {
+    throw invalidRequest(`providerOptions.${CODEX_REMOTE_COMPACTION_V2_OPTION} must be a boolean.`);
+  }
   const hostedTools = options.tools;
   if (hostedTools !== undefined && !Array.isArray(hostedTools)) {
     throw invalidRequest("providerOptions.tools must be an array.");
   }
-  for (const key of ["model", "input", "instructions", "stream", "tools", CODEX_RESPONSES_LITE_OPTION]) {
+  for (const key of [
+    "model", "input", "instructions", "stream", "tools",
+    CODEX_RESPONSES_LITE_OPTION, CODEX_REMOTE_COMPACTION_V2_OPTION,
+  ]) {
     delete options[key];
   }
 

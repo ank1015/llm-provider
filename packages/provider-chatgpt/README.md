@@ -33,6 +33,10 @@ Requests include bearer authentication, `chatgpt-account-id`,
 `openai-beta: responses=experimental`, and a package-specific user agent.
 `providerOptions.prompt_cache_key` also sets `session-id` and `x-client-request-id`.
 `providerOptions.codex_responses_lite: true` enables the Lite mapping and header.
+`providerOptions.codex_remote_compaction_v2: true` sends
+`x-codex-beta-features: remote_compaction_v2` without copying that transport option
+into the request body. A caller requests compaction by replaying a custom native
+item whose content contains `{ "type": "compaction_trigger" }`.
 
 The reader discards text, reasoning, and argument deltas. It retains completed
 `response.output_item.done` events and one earlier response ID as fallbacks. The
