@@ -2,7 +2,11 @@ import { LlmError } from "@llm-providers/contracts";
 import type { AssistantResponse } from "@llm-providers/contracts";
 import { configureClient, validateTimeout, type ChatGptClientOptions } from "./config.js";
 import { httpError, invalidRequest } from "./errors.js";
-import { buildResponseRequest, CODEX_RESPONSES_LITE_OPTION } from "./request.js";
+import {
+  buildResponseRequest,
+  CODEX_REMOTE_COMPACTION_V2_OPTION,
+  CODEX_RESPONSES_LITE_OPTION,
+} from "./request.js";
 import { convertResponseEvents } from "./response.js";
 import { readResponseBody, readResponseEvents } from "./stream.js";
 
@@ -38,6 +42,9 @@ export function createChatGptClient(options: ChatGptClientOptions): ChatGptClien
       if (input.providerOptions?.[CODEX_RESPONSES_LITE_OPTION] === true) {
         headers.set("x-openai-internal-codex-responses-lite", "true");
       }
+      if (input.providerOptions?.[CODEX_REMOTE_COMPACTION_V2_OPTION] === true) {
+        addBetaFeature(headers, "remote_compaction_v2");
+      }
       const controller = new AbortController();
       const onAbort = () => controller.abort(cancelled());
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -69,6 +76,15 @@ export function createChatGptClient(options: ChatGptClientOptions): ChatGptClien
       }
     },
   };
+}
+
+function addBetaFeature(headers: Headers, feature: string): void {
+  const features = (headers.get("x-codex-beta-features") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (!features.includes(feature)) features.push(feature);
+  headers.set("x-codex-beta-features", features.join(","));
 }
 
 function setCacheAffinity(headers: Headers, key: unknown): void {

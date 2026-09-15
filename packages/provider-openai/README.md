@@ -37,6 +37,11 @@ Each call makes at most one HTTP request. There are no retries, background polli
 streaming callbacks, search methods, or automatic tool execution. `background: true`
 is rejected. `providerOptions.codex_responses_lite: true` enables the existing Lite
 body mapping and its corresponding HTTP header.
+`providerOptions.codex_remote_compaction_v2: true` enables provider-native Codex
+compaction by sending `x-codex-beta-features: remote_compaction_v2`; the option is
+transport metadata and is never copied into the Responses JSON body. A caller
+requests compaction by replaying a custom native item whose content contains
+`{ "type": "compaction_trigger" }`.
 
 Failures use the shared `LlmError`. HTTP failures retain status, native provider
 details, and `retryAfterMs` when available; this hint does not trigger retries.

@@ -50,7 +50,9 @@ describe("buildResponseRequest", () => {
 
   it("defaults instructions and forces backend fields when options are omitted", () => {
     expect(buildResponseRequest({
-      modelId, messages: [], providerOptions: { instructions: "override", tools: [], codex_responses_lite: false },
+      modelId, messages: [], providerOptions: {
+        instructions: "override", tools: [], codex_responses_lite: false, codex_remote_compaction_v2: false,
+      },
     })).toEqual({
       model: modelId, input: [], instructions: "You are a helpful assistant.",
       store: false, stream: true, include: ["reasoning.encrypted_content"],
@@ -81,6 +83,17 @@ describe("buildResponseRequest", () => {
     expect(body.input).toEqual([reasoning, call, custom, null]);
     expect(body.input[0]).toBe(reasoning);
     expect(body.input[2]).toBe(custom);
+  });
+
+  it("passes a native compaction trigger while keeping transport options out of the body", () => {
+    const trigger = { type: "compaction_trigger" };
+    const body = buildResponseRequest({
+      modelId,
+      messages: [{ role: "custom", tag: "chatgpt_custom_item", data: { content: [trigger] } }],
+      providerOptions: { codex_remote_compaction_v2: true },
+    });
+    expect(body.input).toEqual([trigger]);
+    expect(body).not.toHaveProperty("codex_remote_compaction_v2");
   });
 
   it("maps text and multimodal tool results using the matching definition", () => {
@@ -145,6 +158,7 @@ describe("buildResponseRequest", () => {
 
   it.each([
     { tools: {} }, { tools: null }, { codex_responses_lite: "true" }, { codex_responses_lite: null },
+    { codex_remote_compaction_v2: "true" }, { codex_remote_compaction_v2: null },
   ])("rejects invalid special options: %j", (providerOptions) => {
     expect(() => buildResponseRequest({ modelId, messages: [], providerOptions })).toThrow(/must be (an array|a boolean)/);
   });

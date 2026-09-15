@@ -69,6 +69,16 @@ describe("createChatGptClient", () => {
     }
   });
 
+  it("advertises remote compaction v2 per call without leaking transport options", async () => {
+    const { client, fetch } = setup();
+    await client.complete({ ...input, providerOptions: { codex_remote_compaction_v2: true } });
+    await client.complete(input);
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("x-codex-beta-features"))
+      .toBe("remote_compaction_v2");
+    expect(new Headers(fetch.mock.calls[1]?.[1]?.headers).has("x-codex-beta-features")).toBe(false);
+    expect(JSON.parse(fetch.mock.calls[0]?.[1]?.body as string)).not.toHaveProperty("codex_remote_compaction_v2");
+  });
+
   it("allows null cache keys without affinity headers", async () => {
     const { client, fetch } = setup();
     await client.complete({ ...input, providerOptions: { prompt_cache_key: null } });
@@ -96,6 +106,7 @@ describe("createChatGptClient", () => {
     { ...input, providerOptions: { background: true } },
     { ...input, providerOptions: { max_output_tokens: 1 } },
     { ...input, providerOptions: { codex_responses_lite: "invalid" } },
+    { ...input, providerOptions: { codex_remote_compaction_v2: "invalid" } },
     { ...input, providerOptions: { tools: {} } },
     { ...input, messages: [{ role: "assistant", provider: "openai", content: [] }] } as ChatGptRequestInput,
     { ...input, messages: [{ role: "custom", tag: "unknown", data: {} }] } as ChatGptRequestInput,

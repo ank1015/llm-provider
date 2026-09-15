@@ -63,6 +63,17 @@ describe("createOpenAiClient", () => {
     expect(body.input[0].role).toBe("developer");
   });
 
+  it("advertises remote compaction v2 per call without leaking transport options", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => Response.json(native()));
+    const client = createOpenAiClient({ apiKey: "test-key", fetch });
+    await client.complete({ ...input, providerOptions: { codex_remote_compaction_v2: true } });
+    await client.complete(input);
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("x-codex-beta-features"))
+      .toBe("remote_compaction_v2");
+    expect(new Headers(fetch.mock.calls[1]?.[1]?.headers).has("x-codex-beta-features")).toBe(false);
+    expect(JSON.parse(fetch.mock.calls[0]?.[1]?.body as string)).not.toHaveProperty("codex_remote_compaction_v2");
+  });
+
   it.each([
     { apiKey: " " }, { apiKey: "secret\r\ninjected: value" }, { project: "bad\nvalue" },
     { baseUrl: "not a URL" }, { baseUrl: "http://example.com/v1" },
@@ -82,6 +93,7 @@ describe("createOpenAiClient", () => {
     { ...input, modelId: "unsupported" as OpenAiRequestInput["modelId"] },
     { ...input, providerOptions: { background: true } },
     { ...input, providerOptions: { codex_responses_lite: "invalid" } },
+    { ...input, providerOptions: { codex_remote_compaction_v2: "invalid" } },
     { ...input, providerOptions: { tools: {} } },
     { ...input, messages: [{ role: "assistant", provider: "chatgpt", content: [] }] } as OpenAiRequestInput,
     { ...input, messages: [{ role: "custom", tag: "unsupported", data: {} }] } as OpenAiRequestInput,
