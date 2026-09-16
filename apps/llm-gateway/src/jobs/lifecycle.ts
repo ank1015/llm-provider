@@ -4,6 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import type { Transaction } from "../db/client.js";
 import { jobs, jobRequests, users, webhookDeliveries } from "../db/schema.js";
 import { JOB_EVENT_CHANNEL, type TerminalJobEvent } from "./events.js";
+import { WEBHOOK_READY_CHANNEL } from "../work-signal.js";
 
 export type Job = typeof jobs.$inferSelect;
 export type Outcome = { status: "succeeded"; response: AssistantResponse }
@@ -30,4 +31,5 @@ export async function finishJob(tx: Transaction, job: Job, outcome: Outcome, ret
   });
   // PostgreSQL delivers transactional notifications only after this completion commits.
   await tx.execute(sql`select pg_notify(${JOB_EVENT_CHANNEL}, ${job.id})`);
+  await tx.execute(sql`select pg_notify(${WEBHOOK_READY_CHANNEL}, ${job.id})`);
 }

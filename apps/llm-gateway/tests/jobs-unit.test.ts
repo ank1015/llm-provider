@@ -8,6 +8,7 @@ import { JobEvents } from "../src/jobs/events.js";
 import { submission, waitQuery } from "../src/jobs/validation.js";
 import { isRetryable, retryDelay, serializeError } from "../src/jobs/policy.js";
 import { validateDestination } from "../src/jobs/provider.js";
+import { WorkSignal } from "../src/work-signal.js";
 
 const input = { accountId: randomUUID(), modelId: "gpt-6-astra", idempotencyKey: "key", messages: [] };
 
@@ -47,6 +48,22 @@ it("validates bounded job waits and wakes only subscribers for the completed job
   await afterClose.wait(1_000);
   current.close();
   afterClose.close();
+});
+
+it("wakes queue consumers without losing notifications between a scan and wait", async () => {
+  const work = new WorkSignal();
+  const before = work.snapshot();
+  work.notify();
+  const immediate = Date.now();
+  await work.wait(before, 1_000);
+  assert.ok(Date.now() - immediate < 100);
+
+  const current = work.snapshot();
+  const waiting = work.wait(current, 1_000);
+  setTimeout(() => work.notify(), 10);
+  const started = Date.now();
+  await waiting;
+  assert.ok(Date.now() - started < 100);
 });
 
 it("retains arbitrary native assistant items, custom data, and JSON keys", () => {

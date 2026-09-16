@@ -7,6 +7,7 @@ import { jobAttempts, jobRequests, jobs, providerAccounts, users } from "../db/s
 import { finishJob } from "./lifecycle.js";
 import { DEFAULT_RETENTION_DAYS, HEARTBEAT_MS, isRetryable, JOB_TIMEOUT_MS, LEASE_MS, MAX_ATTEMPTS, retryDelay, serializeError } from "./policy.js";
 import type { Execute } from "./provider.js";
+import type { WorkSignal } from "../work-signal.js";
 import { cleanupRequests } from "./retention.js";
 
 const failure = (code: string, message: string) => ({ code, message, retryable: false });
@@ -166,15 +167,17 @@ export async function runOnce(db: Database, execute: Execute, signal: AbortSigna
 
 /** Fixed execution slots share one database pool and one independent cleanup loop. */
 export async function runWorker(db: Database, execute: Execute, signal: AbortSignal,
-  retentionDays = DEFAULT_RETENTION_DAYS, concurrency = 1) {
+  retentionDays = DEFAULT_RETENTION_DAYS, concurrency = 1, wake?: WorkSignal) {
   async function consume() {
     while (!signal.aborted) {
+      const observed = wake?.snapshot();
       try {
         if (await runOnce(db, execute, signal, retentionDays)) continue;
       } catch {
         console.error("Job worker operation failed; uncompleted claims will recover after lease expiry.");
       }
-      await sleep(1000, undefined, { signal }).catch(() => {});
+      if (wake && observed !== undefined) await wake.wait(observed, 1000, signal);
+      else await sleep(1000, undefined, { signal }).catch(() => {});
     }
   }
   await Promise.all([runCleanup(db, signal), ...Array.from({ length: concurrency }, consume)]);

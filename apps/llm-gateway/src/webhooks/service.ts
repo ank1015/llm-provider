@@ -3,6 +3,7 @@ import type { Database } from "../db/client.js";
 import { webhookDeliveries as deliveries, webhookDeliveryAttempts as attempts } from "../db/schema.js";
 import { ApiError, notFound } from "../errors.js";
 import { page, type PageInput } from "../pagination.js";
+import { WEBHOOK_READY_CHANNEL } from "../work-signal.js";
 
 const fields = {
   id: deliveries.id, jobId: deliveries.jobId, eventType: deliveries.eventType,
@@ -46,6 +47,7 @@ export async function redeliver(db: Database, userId: string, id: string) {
     const [updated] = await tx.update(deliveries).set({ status: "pending", retryFromAttempt: (last?.number ?? 0) + 1,
       retryStartedAt: new Date(), nextAttemptAt: new Date(), leaseToken: null, leaseExpiresAt: null,
     }).where(eq(deliveries.id, id)).returning(fields);
+    await tx.execute(sql`select pg_notify(${WEBHOOK_READY_CHANNEL}, ${id})`);
     return updated!;
   });
 }

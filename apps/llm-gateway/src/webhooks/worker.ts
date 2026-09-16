@@ -5,6 +5,7 @@ import type { Database } from "../db/client.js";
 import { webhookDeliveries as deliveries, webhookDeliveryAttempts as attempts, users } from "../db/schema.js";
 import { LEASE_MS, MAX_ATTEMPTS, RETRY_WINDOW_MS, retryDelay, type DeliveryResult } from "./policy.js";
 import type { Send } from "./sender.js";
+import type { WorkSignal } from "../work-signal.js";
 
 export async function claimDelivery(db: Database) {
   return db.transaction(async (tx) => {
@@ -72,13 +73,15 @@ export async function runOnce(db: Database, send: Send, signal: AbortSignal) {
 }
 
 /** Independent queue consumer: slow LLM calls do not block callback delivery. */
-export async function runWorker(db: Database, send: Send, signal: AbortSignal) {
+export async function runWorker(db: Database, send: Send, signal: AbortSignal, wake?: WorkSignal) {
   while (!signal.aborted) {
+    const observed = wake?.snapshot();
     try {
       if (await runOnce(db, send, signal)) continue;
     } catch {
       console.error("Webhook worker operation failed; unfinished claims recover after lease expiry.");
     }
-    await sleep(1000, undefined, { signal }).catch(() => {});
+    if (wake && observed !== undefined) await wake.wait(observed, 1000, signal);
+    else await sleep(1000, undefined, { signal }).catch(() => {});
   }
 }
