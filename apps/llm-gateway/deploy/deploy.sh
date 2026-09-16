@@ -25,6 +25,7 @@ read_secret() {
 database_url="$(read_secret llm-providers-database-url)"
 admin_api_key="$(read_secret llm-providers-admin-api-key)"
 encryption_key="$(read_secret llm-providers-encryption-key)"
+webhook_allowed_origins="${WEBHOOK_ALLOWED_ORIGINS:-https://*.acentric.dev,https://streak-upscale-okay.ngrok-free.dev}"
 
 {
   printf 'GATEWAY_IMAGE=%s\n' "$GATEWAY_IMAGE"
@@ -36,7 +37,7 @@ encryption_key="$(read_secret llm-providers-encryption-key)"
   printf 'REQUEST_RETENTION_DAYS=7\n'
   printf 'WORKER_CONCURRENCY=12\n'
   printf 'PROVIDER_ALLOWED_ORIGINS=\n'
-  printf 'WEBHOOK_ALLOWED_ORIGINS=https://*.acentric.dev\n'
+  printf 'WEBHOOK_ALLOWED_ORIGINS=%s\n' "$webhook_allowed_origins"
 } > .env.new
 
 chmod 0600 .env.new

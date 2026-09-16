@@ -10,6 +10,7 @@ import type { JobEvents } from "./events.js";
 import { DEFAULT_RETENTION_DAYS, MAX_REQUEST_BYTES } from "./policy.js";
 import { validateDestination, validateModel } from "./provider.js";
 import type { Submission } from "./validation.js";
+import { JOB_READY_CHANNEL } from "../work-signal.js";
 
 const metadata = {
   id: jobs.id, accountId: jobs.accountId, provider: providerAccounts.provider, modelId: jobs.modelId,
@@ -67,6 +68,7 @@ export async function submitJob(db: Database, userId: string, input: Submission,
     const [job] = await tx.insert(jobs).values({ userId, accountId, modelId, previousJobId: input.previousJobId,
       idempotencyKey: input.idempotencyKey, requestHash }).returning({ id: jobs.id, status: jobs.status });
     await tx.insert(jobRequests).values({ jobId: job!.id, request });
+    await tx.execute(sql`select pg_notify(${JOB_READY_CHANNEL}, ${job!.id})`);
     return job!;
   });
 }
