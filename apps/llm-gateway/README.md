@@ -88,6 +88,8 @@ signal and then retrieve the authoritative job.
   once. Lease recovery after an ambiguous failure can repeat an external call.
 - `idempotencyKey` deduplicates gateway submissions; it cannot undo a provider
   request already sent.
+- Optional opaque `clientContext` is job-local, participates in idempotency, is
+  exposed on job detail, and is included in every signed terminal callback.
 - Provider credentials and webhook secrets are encrypted at rest. API keys are
   stored as hashes.
 - Native provider response content is preserved for compatible continuation.

@@ -14,7 +14,8 @@ const jobId = randomUUID();
 const delivery: typeof webhookDeliveries.$inferSelect = {
   id: deliveryId, userId: randomUUID(), jobId, eventType: "job.succeeded",
   callbackUrl: "https://callbacks.example.com/events",
-  payload: { eventId: deliveryId, type: "job.succeeded", jobId, completedAt: "2026-01-01T00:00:00.000Z" },
+  payload: { eventId: deliveryId, type: "job.succeeded", jobId,
+    clientContext: { routeKey: "minimal-bash-v6", operationId: "op-1" }, completedAt: "2026-01-01T00:00:00.000Z" },
   status: "delivering", retryFromAttempt: 1, retryStartedAt: new Date(),
   nextAttemptAt: new Date(), createdAt: new Date(), deliveredAt: null, leaseToken: null, leaseExpiresAt: null,
 };

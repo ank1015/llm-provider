@@ -136,6 +136,10 @@ describe("gateway database", () => {
     const [stored] = await tx.select().from(schema.jobRequests).where(eq(schema.jobRequests.jobId, jobId));
     assert.deepEqual(stored!.request, request);
     assert.equal(stored!.expiresAt, null);
+    const special = "NUL:\u0000 high:\ud800 low:\udfff emoji:🦊";
+    const clientContext = { routeKey: "minimal-bash-v6", nested: { operationId: "op-1" }, [special]: special };
+    await tx.update(schema.jobs).set({ clientContext }).where(eq(schema.jobs.id, jobId));
+    assert.deepEqual((await tx.select().from(schema.jobs).where(eq(schema.jobs.id, jobId)))[0]!.clientContext, clientContext);
   });
 
   it("enforces account ownership and per-user idempotency", async () => {
@@ -213,14 +217,25 @@ describe("gateway database", () => {
     await expectConstraint(insert, [otherUserId, jobId, deliveryId, payload], "23503");
     assert.equal((await client.query(insert, [userId, jobId, deliveryId, payload])).rows[0].id, deliveryId);
     await expectConstraint(insert, [userId, jobId, deliveryId, payload], "23505");
-    await expectConstraint(`update webhook_deliveries
-      set payload = (payload::jsonb || '{"error": {}}'::jsonb)::json where id = $1`, [deliveryId], "23514");
+    await expectConstraint("update webhook_deliveries set payload = '[]'::json where id = $1", [deliveryId], "23514");
     await expectConstraint("update webhook_deliveries set status = 'delivered' where id = $1", [deliveryId], "23514");
     await client.query("update webhook_deliveries set status = 'delivered', delivered_at = now() where id = $1", [deliveryId]);
     await client.query("update webhook_deliveries set status = 'pending' where id = $1", [deliveryId]);
     await client.query("insert into webhook_delivery_attempts (delivery_id, attempt_number, http_status, finished_at) values ($1, 1, 200, now())", [deliveryId]);
     await expectConstraint("insert into webhook_delivery_attempts (delivery_id, attempt_number) values ($1, 1)", [deliveryId], "23505");
     await expectConstraint("insert into webhook_delivery_attempts (delivery_id, attempt_number, http_status) values ($1, 2, 999)", [deliveryId], "23514");
+  });
+
+  it("enforces job context shape and round-trips it through terminal event payloads", async () => {
+    await expectConstraint("update jobs set client_context = '[]'::json where id = $1", [jobId], "23514");
+    const deliveryId = randomUUID();
+    const base = { eventId: deliveryId, type: "job.succeeded", jobId, completedAt: new Date().toISOString() };
+    const insert = `insert into webhook_deliveries (id, user_id, job_id, event_type, callback_url, payload)
+      values ($3, $1, $2, 'job.succeeded', 'https://example.com/callback', $4)`;
+    const special = "NUL:\u0000 high:\ud800 low:\udfff emoji:🦊";
+    const context = { routeKey: "valid", [special]: special };
+    await client.query(insert, [userId, jobId, deliveryId, { ...base, clientContext: context }]);
+    assert.deepEqual((await client.query("select payload from webhook_deliveries where id = $1", [deliveryId])).rows[0].payload.clientContext, context);
   });
 
   it("enforces provider names, account versions, and unique key hashes", async () => {

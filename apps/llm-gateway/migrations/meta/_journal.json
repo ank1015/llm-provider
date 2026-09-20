@@ -50,6 +50,13 @@
       "when": 1789371283578,
       "tag": "0006_lightweight_webhook_events",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789888973473,
+      "tag": "0007_client_context",
+      "breakpoints": true
     }
   ]
 }
