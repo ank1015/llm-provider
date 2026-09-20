@@ -302,8 +302,8 @@ provider-specific continuation feature and no additional endpoint.
 ### Acceptance, idempotency, and retrieval
 
 Acceptance means the job has been durably recorded. The eventual
-`AssistantResponse` is available through immediate or bounded-wait job lookup,
-not in the initial submission response or webhook.
+`AssistantResponse` is available through immediate or bounded-wait job lookup
+and in the terminal webhook, but not in the initial submission response.
 
 Idempotency is scoped to `userId + idempotencyKey`. Fingerprint the normalized
 submission: fresh input/account for fresh requests, or `previousJobId` plus
@@ -403,11 +403,27 @@ consumer; a pending callback does not delay result retrieval.
 | POST | `/v1/webhook-deliveries/:deliveryId/redeliver` | Schedule another delivery of the same event. |
 
 The gateway sends signed terminal events to the user's registered callback URL.
-Events include a stable event ID, job ID, event type, completion timestamp, and
-the unchanged `clientContext` when one was submitted.
-The callback endpoint belongs to the user's application, not this gateway. After
-durably recording and acknowledging an event, retrieve the authoritative response
-or error from the job endpoint.
+Version 2 events include a stable event ID, job ID, event type, completion timestamp,
+the unchanged `clientContext` when supplied, and the terminal outcome. A successful
+event has the complete normalized `AssistantResponse` in `response` and `error: null`;
+a failed event has `response: null` and the same sanitized job `error`; a cancelled
+event has both fields `null`. Provider-native assistant content (including tool calls
+and reasoning items when present) is retained inside `response.message`. The full
+request, credentials, account data, and raw provider errors are not included.
+The job endpoint remains available for later lookup.
+
+```json
+{
+  "schemaVersion": 2,
+  "eventId": "<uuid>",
+  "type": "job.succeeded",
+  "jobId": "<uuid>",
+  "clientContext": { "routeKey": "minimal-bash-v6" },
+  "completedAt": "2026-09-20T00:00:00.000Z",
+  "response": { "id": "resp_123", "modelId": "gpt-6-astra", "message": { "role": "assistant", "provider": "openai", "content": [] }, "stopReason": "stop", "durationMs": 12, "timestamp": 1790000000000 },
+  "error": null
+}
+```
 
 Delivery retries are independent of provider retries. Redelivery preserves the
 event ID and never reruns the LLM request. Consumers must handle duplicate
@@ -421,23 +437,27 @@ prevent result retrieval.
   include `id`, `jobId`, `eventType`, `callbackUrl`, `status`, `createdAt`,
   `deliveredAt`, `nextAttemptAt`, `retryFromAttempt`, and `retryStartedAt`.
   Lists omit payloads and attempt history.
-- GET detail returns those fields plus immutable `payload` and
+- GET detail returns those fields plus the current outbox `payload` and
   `attempts: { data, nextCursor }`. Attempts are newest-number first. Pass
   `attemptLimit` (1–100, default 50) and the returned numeric `attemptCursor`
   for earlier attempts. Each attempt has `id`, `deliveryId`, `attemptNumber`,
   `startedAt`, `finishedAt`, `httpStatus`, and a safe `error` or null.
-- The immutable payload is `{ eventId, type, jobId, completedAt }` for successful,
-  failed, and cancelled jobs, plus `clientContext` when supplied on that job.
-  Omitted context leaves the field absent. The exact stored payload is reused for
-  automatic retries and manual redelivery and the context is covered by the
-  existing raw-body webhook signature. It never embeds an `AssistantResponse`,
-  job error, request, credentials, or account data.
+- New event bodies have `schemaVersion: 2` and always include `response` and
+  `error` (possibly null). Omitted context leaves `clientContext` absent. The
+  full body is retained unchanged through retries. A confirmed 2xx atomically
+  marks the delivery successful and removes `response`/`error` from the outbox
+  payload, leaving its envelope and attempt history. GET detail then shows that
+  compact envelope, not the last transmitted body. Manual redelivery reconstructs
+  the same full body from the retained job outcome before queueing. Historical
+  unversioned events retain their original lightweight body on redelivery.
+  Every transmitted body, including the outcome and context, is covered by the
+  existing raw-body webhook signature.
 - POST redeliver takes no body. Delivered/failed events return `202` with the
   metadata record in `pending` status; their eight-attempt/24-hour retry budget
   restarts without deleting history. Concurrent requeues serialize. Pending,
   retry-waiting, or delivering events return `409 delivery_already_scheduled`;
   this endpoint does not reset or hurry an active cycle.
-- Redelivery preserves event ID, payload, captured destination, and any earlier
+- Redelivery preserves event ID, logical event body, captured destination, and any earlier
   `deliveredAt`. A later successful acknowledgement updates `deliveredAt`.
   `retryFromAttempt` is the first lifetime attempt number in the current cycle;
   `retryStartedAt` is that cycle's start, not original event creation time.

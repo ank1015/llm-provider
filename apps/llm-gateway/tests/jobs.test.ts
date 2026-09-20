@@ -120,7 +120,7 @@ describe("jobs API and worker", () => {
     for (const secret of ["test-provider-key", "requestHash", "leaseToken", "secretsEncrypted"]) assert.ok(!text.includes(secret));
   });
 
-  it("waits for terminal state without holding the result in the webhook", async () => {
+  it("waits for terminal state and includes the result in the webhook", async () => {
     const job = await submit();
     const waiting = Promise.resolve(request(`/v1/jobs/${job.id}/wait?timeoutMs=2000`)).then(async (result) => {
       assert.equal(result.status, 200);
@@ -134,9 +134,12 @@ describe("jobs API and worker", () => {
     assert.deepEqual(completed.response, result);
 
     const event = (await events(job.id))[0]!;
-    assert.deepEqual(Object.keys(event.payload).sort(), ["completedAt", "eventId", "jobId", "type"]);
+    assert.deepEqual(Object.keys(event.payload).sort(), ["completedAt", "error", "eventId", "jobId", "response", "schemaVersion", "type"]);
     assert.equal(event.payload.jobId, job.id);
     assert.equal(event.payload.type, "job.succeeded");
+    assert.equal(event.payload.schemaVersion, 2);
+    assert.deepEqual(event.payload.response, result);
+    assert.equal(event.payload.error, null);
 
     const queued = await submit();
     const timed = await (await request(`/v1/jobs/${queued.id}/wait?timeoutMs=20`)).json();
@@ -183,7 +186,7 @@ describe("jobs API and worker", () => {
     const details = await (await request(`/v1/jobs/${job.id}`)).json();
     assert.equal(details.status, "succeeded");
     assert.deepEqual(details.response, result);
-    assert.deepEqual(Object.keys((await events(job.id))[0]!.payload).sort(), ["completedAt", "eventId", "jobId", "type"]);
+    assert.deepEqual((await events(job.id))[0]!.payload.response, result);
     const listing = await request("/v1/jobs");
     assert.equal(listing.status, 200);
     assert.deepEqual((await listing.json()).data[0].usage, result.usage);
@@ -285,9 +288,11 @@ describe("jobs API and worker", () => {
     assert.equal(callback.length, 1);
     assert.equal(callback[0]!.callbackUrl, "https://example.com/new");
     assert.equal(callback[0]!.payload.eventId, callback[0]!.id);
-    assert.deepEqual(Object.keys(callback[0]!.payload).sort(), ["completedAt", "eventId", "jobId", "type"]);
+    assert.deepEqual(Object.keys(callback[0]!.payload).sort(), ["completedAt", "error", "eventId", "jobId", "response", "schemaVersion", "type"]);
     assert.equal(callback[0]!.payload.jobId, job.id);
     assert.equal(callback[0]!.payload.type, "job.succeeded");
+    assert.deepEqual(callback[0]!.payload.response, result);
+    assert.equal(callback[0]!.payload.error, null);
     assert.equal(callback[0]!.status, "pending");
     const serialized = await (await request(`/v1/jobs/${job.id}/attempts`)).json();
     assert.equal(serialized.data[0].inputTokens, "10");
@@ -317,6 +322,8 @@ describe("jobs API and worker", () => {
       assert.deepEqual(details.clientContext, item.context);
       const [event] = await events(job.id);
       assert.deepEqual(event!.payload.clientContext, item.context);
+      assert.deepEqual(event!.payload.response, details.response);
+      assert.deepEqual(event!.payload.error, details.error);
       assert.equal(event!.callbackUrl, first.user.callbackUrl);
     }
   });

@@ -12,6 +12,7 @@ import { createAccount } from "../src/accounts/service.js";
 import { cancelJob, submitJob } from "../src/jobs/service.js";
 import { claimDelivery, completeDelivery, runOnce, runWorker } from "../src/webhooks/worker.js";
 import { createSender, signature } from "../src/webhooks/sender.js";
+import { compactTerminalEvent } from "../src/jobs/events.js";
 
 const url = process.env.TEST_DATABASE_URL;
 if (!url) throw new Error("TEST_DATABASE_URL must point to a disposable PostgreSQL database.");
@@ -99,10 +100,13 @@ describe("webhook API and worker", () => {
     assert.equal((await request("/v1/webhook-deliveries?extra=1")).status, 400);
   });
 
-  it("delivers signed events without changing jobs, payloads, or provider attempts", async () => {
+  it("delivers signed outcomes and compacts the outbox after acknowledgement", async () => {
     const context = { routeKey: "minimal-bash-v6", nested: { operationId: "op-1" } };
     const item = await event(context);
     assert.deepEqual(item.payload.clientContext, context);
+    assert.equal(item.payload.schemaVersion, 2);
+    assert.equal(item.payload.response, null);
+    assert.equal(item.payload.error, null);
     let calls = 0;
     await runOnce(db, createSender(config.encryptionKey, ["https://example.com"], async (url, init) => {
       calls++; assert.equal(url, item.callbackUrl);
@@ -114,7 +118,9 @@ describe("webhook API and worker", () => {
     assert.equal(calls, 1);
     const row = await stored(item.id);
     assert.equal(row.status, "delivered"); assert.ok(row.deliveredAt); assert.equal(row.leaseToken, null);
-    assert.deepEqual(row.payload, item.payload);
+    assert.deepEqual(row.payload, compactTerminalEvent(item.payload));
+    assert.ok(!("response" in row.payload));
+    assert.ok(!("error" in row.payload));
     assert.equal((await db.select().from(jobs).where(eq(jobs.id, item.jobId)))[0]!.status, "cancelled");
     assert.deepEqual(await db.select().from(jobAttempts).where(eq(jobAttempts.jobId, item.jobId)), []);
     const res = await request(`/v1/webhook-deliveries/${item.id}`);
@@ -129,6 +135,7 @@ describe("webhook API and worker", () => {
     const item = await event();
     await runOnce(db, async () => ({ ...transient, retryAfterMs: 90_000 }), signal());
     assert.equal((await stored(item.id)).status, "retry_wait");
+    assert.deepEqual((await stored(item.id)).payload, item.payload);
     assert.ok((await stored(item.id)).nextAttemptAt.getTime() > Date.now() + 85_000);
     assert.equal(await claimDelivery(db), null);
     await due(item.id);
@@ -160,9 +167,12 @@ describe("webhook API and worker", () => {
     assert.equal(accepted.status, 202);
     assert.equal((await accepted.json()).retryFromAttempt, 9);
     await due(item.id);
-    await runOnce(db, async () => ({ httpStatus: 200 }), signal());
+    await runOnce(db, async (delivery) => {
+      assert.deepEqual(delivery.payload, item.payload);
+      return { httpStatus: 200 };
+    }, signal());
     const row = await stored(item.id); assert.equal(row.status, "delivered");
-    assert.deepEqual(row.payload, item.payload); assert.equal(row.callbackUrl, item.callbackUrl);
+    assert.deepEqual(row.payload, compactTerminalEvent(item.payload)); assert.equal(row.callbackUrl, item.callbackUrl);
     assert.deepEqual(row.payload.clientContext, context);
     assert.equal((await history(item.id)).length, 9);
     const details = await (await request(`/v1/webhook-deliveries/${item.id}?attemptLimit=2`)).json();
@@ -172,6 +182,26 @@ describe("webhook API and worker", () => {
     assert.equal((await request(`/v1/webhook-deliveries/${item.id}?attemptLimit=0`)).status, 400);
     await request(`/v1/webhook-deliveries/${item.id}/redeliver`, "POST");
     assert.equal((await stored(item.id)).deliveredAt!.getTime(), row.deliveredAt!.getTime());
+    assert.deepEqual((await stored(item.id)).payload, item.payload);
+  });
+
+  it("redelivers historical unversioned events without inventing an outcome", async () => {
+    const item = await event({ routeKey: "legacy" });
+    const legacyPayload = { eventId: item.id, type: item.eventType, jobId: item.jobId,
+      clientContext: item.payload.clientContext, completedAt: item.payload.completedAt };
+    await db.update(deliveries).set({ payload: legacyPayload }).where(eq(deliveries.id, item.id));
+    await runOnce(db, async (delivery) => {
+      assert.deepEqual(delivery.payload, legacyPayload);
+      return { httpStatus: 204 };
+    }, signal());
+    assert.deepEqual((await stored(item.id)).payload, legacyPayload);
+    assert.equal((await request(`/v1/webhook-deliveries/${item.id}/redeliver`, "POST")).status, 202);
+    await due(item.id);
+    await runOnce(db, async (delivery) => {
+      assert.deepEqual(delivery.payload, legacyPayload);
+      return { httpStatus: 200 };
+    }, signal());
+    assert.deepEqual((await stored(item.id)).payload, legacyPayload);
   });
 
   it("does not reset an active cycle and serializes simultaneous redelivery requests", async () => {
@@ -211,6 +241,7 @@ describe("webhook API and worker", () => {
     assert.equal((await stored(item.id)).status, "failed");
     assert.ok((await history(item.id)).every(x => x.finishedAt && x.error?.code === "lease_expired"));
     assert.equal((await request(`/v1/webhook-deliveries/${item.id}/redeliver`, "POST")).status, 202);
+    await due(item.id);
     await runOnce(db, async () => ({ httpStatus: 200 }), signal());
     assert.equal((await stored(item.id)).status, "delivered");
   });

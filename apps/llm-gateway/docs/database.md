@@ -20,9 +20,11 @@ tables or migrations. Migration
 `0003_webhook_retry_cycles.sql` adds two cycle fields without adding tables.
 `0004_usage_attempt_index.sql` adds an attempt-time reporting index.
 `0005_lossless_payloads.sql` preserves provider-native JSON and separates usage.
-`0006_lightweight_webhook_events.sql` reduces stored terminal events to canonical
+`0006_lightweight_webhook_events.sql` reduced historical terminal events to canonical
 completion metadata. `0007_client_context.sql` adds optional job-local client
 context and updates terminal event payload validation for that lossless object.
+New version 2 events carry the terminal outcome in the existing JSON column;
+no database migration is required for this callback format change.
 
 The schema has **eight tables**. `job_requests` keeps large request payloads
 separate so they can expire independently
@@ -361,7 +363,7 @@ Separating this table gives input its own lifecycle and keeps frequently read
 job metadata separate from large, short-lived request data. Job-list queries
 should not load payloads or full responses.
 
-Full responses and lightweight webhook events also need retention policies, but
+Full responses and webhook events also need retention policies, but
 their periods are not yet decided. Request expiry must not implicitly remove them
 or break pending callback delivery/result retrieval.
 
@@ -416,7 +418,7 @@ there is no separate events/outbox table initially.
 | `user_id` | `uuid` | Owning user. |
 | `event_type` | `text` | `job.succeeded`, `job.failed`, or `job.cancelled`. |
 | `callback_url` | `text` | Destination captured for this event. |
-| `payload` | `json` | Stable lightweight event body containing job identity and completion metadata. |
+| `payload` | `json` | Full version 2 terminal body until acknowledged; compact event envelope after delivery. |
 | `status` | `text` | `pending`, `delivering`, `retry_wait`, `delivered`, or `failed`. |
 | `retry_from_attempt` | `integer` | First lifetime attempt number in the current retry cycle; positive, default 1. |
 | `retry_started_at` | `timestamptz` | Start of the current 24-hour retry window; defaults to event creation time. |
@@ -433,20 +435,28 @@ Constraints and behavior:
 - Save the terminal result, finalize request expiry, and insert the pending
   delivery in the same transaction. A crash must not leave a completed job
   without its recoverable notification.
-- Event payload is `{ eventId, type, jobId, completedAt }`, plus the unchanged
-  job `clientContext` object when present. Responses, errors, request input,
-  credentials, and account data are retrieved from their owning resources rather
-  than copied into delivery records.
+- New event payload is `{ schemaVersion: 2, eventId, type, jobId, completedAt,
+  response, error }`, plus unchanged job `clientContext` when present. Successful
+  events carry the full normalized `AssistantResponse` and null error; failed
+  events carry null response and the sanitized job error; cancelled events carry
+  two nulls. Request input, credentials, account data, and raw provider errors
+  are excluded. Historical unversioned events retain their lightweight format.
+- Keep the full version 2 body through initial delivery and all automatic retries.
+  In the same transaction that records a confirmed 2xx and marks the delivery
+  `delivered`, remove `response` and `error` from the outbox JSON. A failed or
+  ambiguous delivery keeps its full body. The job row retains the outcome.
 - Deliveries are signed using the current user webhook secret at claim time.
   Rotation affects future claims; already claimed calls may use the previous
   secret. Receivers handle that brief overlap; old secrets are not retained.
-- Manual redelivery requeues this row, retains its event ID/payload, and adds to
-  attempt history. It never reruns the provider request.
+- Manual redelivery requeues this row and adds to attempt history. If its version 2
+  payload was compacted, restore `response` and `error` from the retained job row
+  before queueing. The stable event ID, completion time, context, and destination
+  do not change. It never reruns the provider request.
 - Delivery can happen more than once; consumers deduplicate by event ID.
 - Callback failure does not change the job's outcome or block result retrieval.
 - Manual redelivery is allowed only after `delivered`/`failed`. Under a row lock,
   set the cycle's first attempt to `last lifetime attempt + 1`, set its start to
-  now, and queue it. Keep the payload, destination, original creation timestamp,
+  now, and queue it. Restore a compacted outcome, and keep the destination, original creation timestamp,
   history, and previous successful `delivered_at`. The latter updates on another
   success. Active cycles return an API conflict instead of resetting retries.
 
@@ -625,8 +635,8 @@ additional charges. Cancellation is also best-effort, not a billing rollback.
 - Completion, input expiry, one pending callback event, and a transactional
   PostgreSQL terminal-job notification are one transaction.
   Callback URL is captured at completion, event ID equals delivery ID, and
-  payload is `{ eventId, type, jobId, completedAt }` for every terminal status,
-  plus the job's unchanged `clientContext` when present.
+  new payload is a version 2 terminal event with the full normalized response or
+  sanitized error, plus the job's unchanged `clientContext` when present.
   An independent webhook consumer claims pending events; job completion does not
   wait for delivery. The notification wakes bounded API waiters, which re-read
   the authoritative job and do not hold a transaction or pool connection while idle.
@@ -667,9 +677,10 @@ additional charges. Cancellation is also best-effort, not a billing rollback.
   followed/read; only acknowledgement status and safe classification are stored.
   Domains/DNS must be operator-controlled or trusted, with deployment egress
   rules as an additional network boundary.
-- HMAC-SHA256 signs the raw JSON with the literal current webhook secret and a
-  timestamp/event-ID prefix. URL and event payload are immutable snapshots;
-  signing timestamps/secrets can change per attempt. See
+- HMAC-SHA256 signs the raw JSON, including the outcome, with the literal current
+  webhook secret and a timestamp/event-ID prefix. The URL and logical event are
+  stable; the outbox payload is compacted after acknowledgement and restored for
+  redelivery. Signing timestamps/secrets can change per attempt. See
   [Operations](./operations.md#webhook-receivers) for receiver verification,
   freshness checks, and event-ID deduplication.
 - Shutdown leaves dispatched work for lease recovery. An acknowledgement lost
@@ -680,7 +691,7 @@ additional charges. Cancellation is also best-effort, not a billing rollback.
 - **Credential purge:** old configuration versions are not retained; encrypted
   secrets on soft-deleted accounts currently remain until a purge policy exists.
 - **Longer-term retention:** request input starts at seven days after completion;
-  response, callback payload, job/attempt metadata, and idempotency retention
+  response, callback event, job/attempt metadata, and idempotency retention
   windows still need decisions. Do not silently permit duplicate submissions
   by purging idempotency records too early. Preserve parent job references
   independently of payload expiry, and define continuation availability if
