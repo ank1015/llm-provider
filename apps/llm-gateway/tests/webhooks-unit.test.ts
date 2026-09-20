@@ -14,8 +14,12 @@ const jobId = randomUUID();
 const delivery: typeof webhookDeliveries.$inferSelect = {
   id: deliveryId, userId: randomUUID(), jobId, eventType: "job.succeeded",
   callbackUrl: "https://callbacks.example.com/events",
-  payload: { eventId: deliveryId, type: "job.succeeded", jobId,
-    clientContext: { routeKey: "minimal-bash-v6", operationId: "op-1" }, completedAt: "2026-01-01T00:00:00.000Z" },
+  payload: { schemaVersion: 2, eventId: deliveryId, type: "job.succeeded", jobId,
+    clientContext: { routeKey: "minimal-bash-v6", operationId: "op-1" }, completedAt: "2026-01-01T00:00:00.000Z",
+    response: { id: "resp_1", modelId: "gpt-6-astra", message: { role: "assistant", provider: "openai",
+      content: [{ type: "reasoning", summary: [{ type: "summary_text", text: "Considered options" }] },
+        { type: "function_call", name: "lookup", call_id: "call_1", arguments: "{}" }] },
+      stopReason: "tool_use", durationMs: 12, timestamp: Date.now() }, error: null },
   status: "delivering", retryFromAttempt: 1, retryStartedAt: new Date(),
   nextAttemptAt: new Date(), createdAt: new Date(), deliveredAt: null, leaseToken: null, leaseExpiresAt: null,
 };
@@ -30,6 +34,7 @@ it("signs the exact timestamp, event ID, and raw UTF-8 body with the literal sec
   assert.notEqual(signature(secret, delivery.id, "1700000000", body), signature(secret, delivery.id, "1700000001", body));
   assert.notEqual(signature(secret, delivery.id, "1700000000", body), signature(secret, randomUUID(), "1700000000", body));
   assert.notEqual(signature(secret, delivery.id, "1700000000", body), signature(secret, delivery.id, "1700000000", body + " "));
+  assert.notEqual(signature(secret, delivery.id, "1700000000", body), signature(secret, delivery.id, "1700000000", body.replace("Considered options", "Changed")));
 });
 
 it("sends signed JSON and treats any 2xx as acknowledgement without reading the body", async () => {

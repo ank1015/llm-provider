@@ -1,14 +1,32 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Pool, PoolClient } from "pg";
+import type { AssistantResponse } from "@llm-providers/contracts";
 
 export const JOB_EVENT_CHANNEL = "llm_gateway_job_terminal";
 
 export interface TerminalJobEvent {
+  /** Version 1 events have no version or outcome; version 2 includes the terminal outcome while in flight. */
+  schemaVersion?: 2;
   eventId: string;
   type: "job.succeeded" | "job.failed" | "job.cancelled";
   jobId: string;
   clientContext?: Record<string, unknown>;
   completedAt: string;
+  response?: AssistantResponse | null;
+  error?: Record<string, unknown> | null;
+}
+
+/** Keep the event envelope and identity after acknowledgement, but not a second copy of the result. */
+export function compactTerminalEvent(event: TerminalJobEvent): TerminalJobEvent {
+  if (event.schemaVersion !== 2) return event;
+  const { response: _response, error: _error, ...envelope } = event;
+  return envelope;
+}
+
+/** Reconstruct a compacted v2 event for manual redelivery from the durable job outcome. */
+export function restoreTerminalEvent(event: TerminalJobEvent, response: AssistantResponse | null,
+  error: Record<string, unknown> | null): TerminalJobEvent {
+  return event.schemaVersion === 2 ? { ...event, response, error } : event;
 }
 
 interface Subscription {

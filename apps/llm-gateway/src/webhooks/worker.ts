@@ -6,6 +6,7 @@ import { webhookDeliveries as deliveries, webhookDeliveryAttempts as attempts, u
 import { LEASE_MS, MAX_ATTEMPTS, RETRY_WINDOW_MS, retryDelay, type DeliveryResult } from "./policy.js";
 import type { Send } from "./sender.js";
 import type { WorkSignal } from "../work-signal.js";
+import { compactTerminalEvent } from "../jobs/events.js";
 
 export async function claimDelivery(db: Database) {
   return db.transaction(async (tx) => {
@@ -50,6 +51,7 @@ export async function completeDelivery(db: Database, claim: Claim, result: Deliv
     await tx.update(deliveries).set({
       status: !result.error ? "delivered" : retry ? "retry_wait" : "failed",
       deliveredAt: !result.error ? now : delivery.deliveredAt,
+      ...(!result.error ? { payload: compactTerminalEvent(delivery.payload) } : {}),
       ...(retry ? { nextAttemptAt } : {}), leaseToken: null, leaseExpiresAt: null,
     }).where(eq(deliveries.id, delivery.id));
   });

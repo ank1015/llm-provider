@@ -1,7 +1,8 @@
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { webhookDeliveries as deliveries, webhookDeliveryAttempts as attempts } from "../db/schema.js";
+import { jobs, webhookDeliveries as deliveries, webhookDeliveryAttempts as attempts } from "../db/schema.js";
 import { ApiError, notFound } from "../errors.js";
+import { restoreTerminalEvent } from "../jobs/events.js";
 import { page, type PageInput } from "../pagination.js";
 import { WEBHOOK_READY_CHANNEL } from "../work-signal.js";
 
@@ -37,15 +38,27 @@ export async function getDelivery(db: Database, userId: string, id: string, inpu
 
 export async function redeliver(db: Database, userId: string, id: string) {
   return db.transaction(async (tx) => {
-    const [delivery] = await tx.select(fields).from(deliveries).where(owned(userId, id)).for("update");
+    const [delivery] = await tx.select({ ...fields, payload: deliveries.payload }).from(deliveries).where(owned(userId, id)).for("update");
     if (!delivery) notFound("Webhook delivery");
     if (delivery.status !== "delivered" && delivery.status !== "failed") {
       throw new ApiError(409, "delivery_already_scheduled", "This delivery is already scheduled or in progress.");
     }
     const [last] = await tx.select({ number: attempts.attemptNumber }).from(attempts)
       .where(eq(attempts.deliveryId, id)).orderBy(desc(attempts.attemptNumber)).limit(1);
+    let payload = delivery.payload;
+    if (payload.schemaVersion === 2 && payload.response === undefined && payload.error === undefined) {
+      const [job] = await tx.select({ status: jobs.status, response: jobs.response, error: jobs.error })
+        .from(jobs).where(and(eq(jobs.id, delivery.jobId), eq(jobs.userId, userId)));
+      if (!job || `job.${job.status}` !== delivery.eventType
+        || (job.status === "succeeded" && !job.response)
+        || (job.status === "failed" && !job.error)) {
+        throw new ApiError(409, "job_outcome_unavailable", "The retained job outcome is unavailable for redelivery.");
+      }
+      payload = restoreTerminalEvent(payload, job.response, job.error);
+    }
+    const now = new Date();
     const [updated] = await tx.update(deliveries).set({ status: "pending", retryFromAttempt: (last?.number ?? 0) + 1,
-      retryStartedAt: new Date(), nextAttemptAt: new Date(), leaseToken: null, leaseExpiresAt: null,
+      retryStartedAt: now, nextAttemptAt: now, leaseToken: null, leaseExpiresAt: null, payload,
     }).where(eq(deliveries.id, id)).returning(fields);
     await tx.execute(sql`select pg_notify(${WEBHOOK_READY_CHANNEL}, ${id})`);
     return updated!;

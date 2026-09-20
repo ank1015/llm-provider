@@ -174,15 +174,19 @@ Bounded wait requests use it for prompt wake-up, then read the job. The initial
 read, subscription, and second read close the completion race. A missed hint can
 delay a response until its wait timeout, but cannot hide or lose the stored result.
 
-Terminal webhooks deliberately contain identifiers, timestamps, and the job's
-optional unchanged client context, not LLM output or errors. Consumers retrieve
-the job after durably accepting the event. This keeps delivery and inbox payloads
-small and makes PostgreSQL the only result authority. Context is part of the
-immutable signed payload across retries and redelivery; it is never model input or
+Version 2 terminal webhooks contain identifiers, timestamps, the job's optional
+unchanged client context, and the complete normalized response or sanitized job
+error. They never contain the request, credentials, or raw provider errors. The
+job remains the durable result authority and is available for later lookup.
+The signed body remains stable across automatic retries. After a confirmed 2xx,
+the worker atomically marks delivery complete and compacts its outbox payload to
+the event envelope. Manual redelivery restores the outcome from the retained job
+row before queuing the same event ID and destination. Historical unversioned
+lightweight events are redelivered unchanged. Context is never model input or
 callback-routing configuration.
 
 Callback failure never repeats the LLM job. Manual redelivery starts a new
-delivery retry cycle for the same immutable event.
+delivery retry cycle for the same logical event.
 
 ## Trust boundaries
 

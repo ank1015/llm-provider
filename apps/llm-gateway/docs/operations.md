@@ -159,7 +159,8 @@ therefore require an explicit maintenance window rather than competing with live
 traffic.
 
 Request input expires only after a job reaches a terminal state. Cleanup removes
-expired inputs in batches of 100. Responses, attempts, lightweight webhook payloads,
+expired inputs in batches of 100. Responses, attempts, pending full callback payloads,
+compacted delivered callback envelopes,
 job metadata, and idempotency records currently have no automatic retention policy.
 Capacity planning must include them.
 

@@ -66,8 +66,8 @@ See [.env.example](./.env.example) for a complete template and
 
 Every user-scoped request uses `Authorization: Bearer <user-key>`. Job submission
 returns `202` after durable acceptance. Retrieve the result by job ID, wait up to
-five minutes for terminal state, or use the lightweight terminal webhook as a wake-up
-signal and then retrieve the authoritative job.
+five minutes for terminal state, or consume the signed terminal webhook with the
+full normalized response or sanitized failure. The job remains available for later lookup.
 
 ## Documentation
 
