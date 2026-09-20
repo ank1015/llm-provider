@@ -109,6 +109,7 @@ describe("jobs API and worker", () => {
     assert.equal(job.status, "queued");
     const details = await (await request(`/v1/jobs/${job.id}`)).json();
     assert.equal(details.previousJobId, null);
+    assert.equal(details.clientContext, null);
     assert.equal(details.requestStatus, "retained");
     assert.deepEqual(details.request.messages, messages);
     assert.equal(details.requestExpiresAt, null);
@@ -145,14 +146,21 @@ describe("jobs API and worker", () => {
   });
 
   it("serializes concurrent equal submissions and rejects conflicting fingerprints", async () => {
-    const input = fresh();
+    const input = fresh({ clientContext: { routeKey: "minimal-bash-v6", nested: { operationId: "op-1", submissionId: "sub-1" } } });
     const results = await Promise.all(Array.from({ length: 6 }, () => submit(input)));
     assert.equal(new Set(results.map((job) => job.id)).size, 1);
-    const duplicate = await submit({ ...input, previousJobId: null, tools: [], providerOptions: {} });
+    const duplicate = await submit({ ...input, previousJobId: null, tools: [], providerOptions: {},
+      clientContext: { nested: { submissionId: "sub-1", operationId: "op-1" }, routeKey: "minimal-bash-v6" } });
     assert.equal(duplicate.id, results[0]!.id);
-    const conflict = await request("/v1/jobs", "POST", { ...input, instructions: "changed" });
-    assert.equal(conflict.status, 409);
-    assert.equal((await conflict.json()).error.code, "idempotency_conflict");
+    for (const changed of [
+      { ...input, instructions: "changed" },
+      { ...input, clientContext: { routeKey: "different" } },
+      { idempotencyKey: input.idempotencyKey, accountId: account.id, modelId: "gpt-6-astra", messages },
+    ]) {
+      const conflict = await request("/v1/jobs", "POST", changed);
+      assert.equal(conflict.status, 409);
+      assert.equal((await conflict.json()).error.code, "idempotency_conflict");
+    }
     const rows = await db.select().from(jobRequests).where(eq(jobRequests.jobId, duplicate.id));
     assert.equal(rows.length, 1);
   });
@@ -286,6 +294,33 @@ describe("jobs API and worker", () => {
     assert.equal(serialized.data[0].totalCostUsd, "0.000350000000");
   });
 
+  it("keeps opaque context out of provider input and includes it in every terminal event", async () => {
+    const cases = [
+      { status: "succeeded", context: { routeKey: "success", nested: { value: [1, true, null] },
+        "NUL:\u0000 high:\ud800 low:\udfff emoji:🦊": "NUL:\u0000 high:\ud800 low:\udfff emoji:🦊" } },
+      { status: "failed", context: { routeKey: "failure", operationId: "op-failed" } },
+      { status: "cancelled", context: { routeKey: "cancel", submissionId: "sub-cancelled" } },
+    ] as const;
+    for (const item of cases) {
+      const job = await submit(fresh({ clientContext: item.context }));
+      if (item.status === "cancelled") {
+        await request(`/v1/jobs/${job.id}/cancel`, "POST");
+      } else {
+        await runOnce(db, async (_account, _model, providerInput) => {
+          assert.ok(!("clientContext" in providerInput));
+          if (item.status === "failed") throw new LlmError("failure", { provider: "openai", kind: "invalid_request" });
+          return response();
+        }, signal());
+      }
+      const details = await (await request(`/v1/jobs/${job.id}`)).json();
+      assert.equal(details.status, item.status);
+      assert.deepEqual(details.clientContext, item.context);
+      const [event] = await events(job.id);
+      assert.deepEqual(event!.payload.clientContext, item.context);
+      assert.equal(event!.callbackUrl, first.user.callbackUrl);
+    }
+  });
+
   it("rolls back completion when the callback write fails", async () => {
     const job = await submit();
     const item = await claim();
@@ -302,19 +337,24 @@ describe("jobs API and worker", () => {
   });
 
   it("creates independent continuation snapshots and deduplicates after parent cleanup", async () => {
-    const parent = await submit(fresh({ instructions: "Keep these", providerOptions: { temperature: 0.2 } }));
+    const parentContext = { routeKey: "parent", sessionId: "session-parent" };
+    const childContext = { routeKey: "child", sessionId: "session-child" };
+    const parent = await submit(fresh({ instructions: "Keep these", providerOptions: { temperature: 0.2 }, clientContext: parentContext }));
     const result = response();
     await runOnce(db, async () => result, signal());
     const extra = [{ role: "user", content: [{ type: "text", text: "Next" }] }];
-    const input = { idempotencyKey: "next", previousJobId: parent.id, messages: extra };
+    const input = { idempotencyKey: "next", previousJobId: parent.id, messages: extra, clientContext: childContext };
     const child = await submit(input);
-    const sibling = await submit({ ...input, idempotencyKey: "branch", messages: [] });
+    const sibling = await submit({ idempotencyKey: "branch", previousJobId: parent.id, messages: [] });
     const details = await (await request(`/v1/jobs/${child.id}`)).json();
     assert.equal(details.accountId, account.id);
     assert.equal(details.previousJobId, parent.id);
     assert.equal(details.request.instructions, "Keep these");
     assert.deepEqual(details.request.providerOptions, { temperature: 0.2 });
     assert.deepEqual(details.request.messages, [...messages, result.message, ...extra]);
+    assert.deepEqual(details.clientContext, childContext);
+    assert.deepEqual((await (await request(`/v1/jobs/${parent.id}`)).json()).clientContext, parentContext);
+    assert.equal((await (await request(`/v1/jobs/${sibling.id}`)).json()).clientContext, null);
     await db.update(jobRequests).set({ expiresAt: new Date(0) }).where(eq(jobRequests.jobId, parent.id));
     assert.equal(await cleanupRequests(db), 1);
     assert.equal((await submit(input)).id, child.id);

@@ -27,7 +27,8 @@ export async function finishJob(tx: Transaction, job: Job, outcome: Outcome, ret
   const type = `job.${outcome.status}` as const;
   await tx.insert(webhookDeliveries).values({
     id: eventId, jobId: job.id, userId: job.userId, eventType: type, callbackUrl: user!.callbackUrl,
-    payload: { eventId, type, jobId: job.id, completedAt: now.toISOString() } satisfies TerminalJobEvent,
+    payload: { eventId, type, jobId: job.id, ...(job.clientContext === null ? {} : { clientContext: job.clientContext }),
+      completedAt: now.toISOString() } satisfies TerminalJobEvent,
   });
   // PostgreSQL delivers transactional notifications only after this completion commits.
   await tx.execute(sql`select pg_notify(${JOB_EVENT_CHANNEL}, ${job.id})`);

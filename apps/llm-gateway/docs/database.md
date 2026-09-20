@@ -21,7 +21,8 @@ tables or migrations. Migration
 `0004_usage_attempt_index.sql` adds an attempt-time reporting index.
 `0005_lossless_payloads.sql` preserves provider-native JSON and separates usage.
 `0006_lightweight_webhook_events.sql` reduces stored terminal events to canonical
-completion metadata and enforces that shape.
+completion metadata. `0007_client_context.sql` adds optional job-local client
+context and updates terminal event payload validation for that lossless object.
 
 The schema has **eight tables**. `job_requests` keeps large request payloads
 separate so they can expire independently
@@ -216,6 +217,7 @@ attempts it takes. Large request input lives in `job_requests`, not in this tabl
 | `model_id` | `text` | Requested catalog model. |
 | `idempotency_key` | `text` | Caller-supplied submission identity. |
 | `request_hash` | `text` | Fingerprint of the normalized submission; see continuation/idempotency rules below. |
+| `client_context` | `json`, nullable | Opaque job-local application metadata supplied by the caller. |
 | `status` | `text` | Current job state. |
 | `response` | `json`, nullable | Complete `AssistantResponse`. |
 | `usage` | `jsonb`, nullable | Final response usage summary for lightweight job listings; written atomically with the response. |
@@ -249,12 +251,14 @@ Constraints and behavior:
   joined for filtering without another independent provider value on the job.
 - Same user/key and same normalized submission return the existing job. A
   different submission with the same key produces a conflict, including
-  concurrent calls.
+  concurrent calls. Adding, removing, or changing `client_context` is a different
+  submission.
 - Define a deterministic, submission-mode-aware fingerprint: fresh requests
   include normalized input, model, and account ID; continuations include
   `previousJobId` and additional messages, not the reconstructed parent input.
   Normalize absent/null `previousJobId` to fresh mode. Do not hash credentials
-  or depend on incidental JSON object-key order.
+  or depend on incidental JSON object-key order. Include optional client context
+  for both forms.
 - Check an existing idempotency record before parent reconstruction/retention
   checks. Repeating an accepted continuation must return its existing child
   even after the parent's payload expires. The fingerprint is retained on
@@ -285,6 +289,8 @@ same transaction before returning `202 Accepted`.
 For continuation, `messages` is a required, non-null array. Omitted/null values
 are invalid rather than being converted to an empty array. Account, model,
 instructions, tools, and provider options are inherited; overrides are rejected.
+Client context is not inherited: persist only the optional object on the child
+submission, independently of the parent's context.
 
 Build the child's complete messages array in this order:
 
@@ -427,9 +433,10 @@ Constraints and behavior:
 - Save the terminal result, finalize request expiry, and insert the pending
   delivery in the same transaction. A crash must not leave a completed job
   without its recoverable notification.
-- Event payload is `{ eventId, type, jobId, completedAt }`. Responses, errors,
-  request input, credentials, and account data are retrieved from their owning
-  resources rather than copied into delivery records.
+- Event payload is `{ eventId, type, jobId, completedAt }`, plus the unchanged
+  job `clientContext` object when present. Responses, errors, request input,
+  credentials, and account data are retrieved from their owning resources rather
+  than copied into delivery records.
 - Deliveries are signed using the current user webhook secret at claim time.
   Rotation affects future claims; already claimed calls may use the previous
   secret. Receivers handle that brief overlap; old secrets are not retained.
@@ -556,7 +563,7 @@ query plans demonstrate a need.
    and resolves any existing idempotency record before reconstructing input.
    For a new job, verify account ownership/usability. For a continuation, also
    verify parent ownership/success/retention and assemble the complete input.
-   Atomically create the job and request payload under the idempotency
+   Atomically create the job, optional client context, and request payload under the idempotency
    constraint, coordinating parent reads with cleanup. Concurrent submissions
    must still resolve to one job or a fingerprint conflict. Return acceptance
    only after commit.
@@ -618,7 +625,8 @@ additional charges. Cancellation is also best-effort, not a billing rollback.
 - Completion, input expiry, one pending callback event, and a transactional
   PostgreSQL terminal-job notification are one transaction.
   Callback URL is captured at completion, event ID equals delivery ID, and
-  payload is `{ eventId, type, jobId, completedAt }` for every terminal status.
+  payload is `{ eventId, type, jobId, completedAt }` for every terminal status,
+  plus the job's unchanged `clientContext` when present.
   An independent webhook consumer claims pending events; job completion does not
   wait for delivery. The notification wakes bounded API waiters, which re-read
   the authoritative job and do not hold a transaction or pool connection while idle.

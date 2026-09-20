@@ -232,6 +232,23 @@ For a fresh request, `previousJobId` is absent or null. Supply `accountId`,
 required/optional rules. The selected account determines the provider;
 credentials are not supplied with each job.
 
+Both submission forms may include an optional opaque `clientContext` JSON object:
+
+```json
+{
+  "clientContext": {
+    "routeKey": "minimal-bash-v6",
+    "sessionId": "ses_...",
+    "operationId": "...",
+    "submissionId": "..."
+  }
+}
+```
+
+The gateway stores this application metadata on the submitted job without
+interpreting it. It is never included in provider/model input and never selects
+or overrides the user's configured callback URL.
+
 For a continuation, supply a non-null `previousJobId`, a new `idempotencyKey`,
 and a required, non-null `messages` array containing the additional messages:
 
@@ -256,6 +273,10 @@ assembles messages in this order:
 2. The previous job's `response.message` (the assistant message, not the full
    `AssistantResponse` envelope).
 3. The newly supplied messages, such as user messages or tool results.
+
+`clientContext` is not inherited. A continuation has only the context explicitly
+included in that continuation submission; omitting it creates a child with no
+context even when the parent has one.
 
 Omitted or null `messages` is invalid for continuation; it is not normalized to
 an empty array. Continuation always includes the previous assistant message and
@@ -286,8 +307,10 @@ not in the initial submission response or webhook.
 
 Idempotency is scoped to `userId + idempotencyKey`. Fingerprint the normalized
 submission: fresh input/account for fresh requests, or `previousJobId` plus
-additional messages for continuations. The same key and fingerprint return the
-existing job; a different submission with that key returns a conflict.
+additional messages for continuations, plus the optional `clientContext` in both
+forms. The same key and fingerprint return the existing job; adding, removing,
+or changing context with that key returns `409 idempotency_conflict`, as does any
+other different submission.
 
 Check for an existing idempotent job before reconstructing a continuation or
 requiring the parent's payload to remain available. Repeating an accepted
@@ -324,7 +347,8 @@ requests; a separate requests resource is unnecessary.
   and lifecycle timestamps, plus the successful response's `usage` (or null).
   It never includes prompts, full responses, leases, or credentials.
 - GET detail returns that metadata plus `response`, `error`, `request`,
-  `requestExpiresAt`, and `requestStatus: "retained" | "expired"`. Unavailable
+  `clientContext`, `requestExpiresAt`, and `requestStatus: "retained" | "expired"`.
+  `clientContext` is the submitted object or null when omitted. Unavailable
   response/error/request fields are null. Expired input is hidden even before
   cleanup runs; after deletion its expiry timestamp is also unavailable.
 - GET wait accepts only `timeoutMs`, an integer from 1 through 300000 that defaults
@@ -379,7 +403,8 @@ consumer; a pending callback does not delay result retrieval.
 | POST | `/v1/webhook-deliveries/:deliveryId/redeliver` | Schedule another delivery of the same event. |
 
 The gateway sends signed terminal events to the user's registered callback URL.
-Events include only a stable event ID, job ID, event type, and completion timestamp.
+Events include a stable event ID, job ID, event type, completion timestamp, and
+the unchanged `clientContext` when one was submitted.
 The callback endpoint belongs to the user's application, not this gateway. After
 durably recording and acknowledging an event, retrieve the authoritative response
 or error from the job endpoint.
@@ -402,8 +427,11 @@ prevent result retrieval.
   for earlier attempts. Each attempt has `id`, `deliveryId`, `attemptNumber`,
   `startedAt`, `finishedAt`, `httpStatus`, and a safe `error` or null.
 - The immutable payload is `{ eventId, type, jobId, completedAt }` for successful,
-  failed, and cancelled jobs. It never embeds an `AssistantResponse`, job error,
-  request, credentials, or account data.
+  failed, and cancelled jobs, plus `clientContext` when supplied on that job.
+  Omitted context leaves the field absent. The exact stored payload is reused for
+  automatic retries and manual redelivery and the context is covered by the
+  existing raw-body webhook signature. It never embeds an `AssistantResponse`,
+  job error, request, credentials, or account data.
 - POST redeliver takes no body. Delivered/failed events return `202` with the
   metadata record in `pending` status; their eight-attempt/24-hour retry budget
   restarts without deleting history. Concurrent requeues serialize. Pending,

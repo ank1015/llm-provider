@@ -33,14 +33,15 @@ const tool: z.ZodType<ToolDefinition> = z.discriminatedUnion("type", [
 ]);
 
 const idempotencyKey = z.string().min(1).max(200).regex(/^\S+$/);
+const clientContext = fields.optional();
 export const submission = z.union([
   z.strictObject({
-    idempotencyKey, previousJobId: z.null().optional().default(null),
+    idempotencyKey, clientContext, previousJobId: z.null().optional().default(null),
     accountId: z.uuid(), modelId: z.string().min(1).max(300),
     instructions: z.string().optional(), messages: z.array(message),
     tools: z.array(tool).default([]), providerOptions: fields.default({}),
   }),
-  z.strictObject({ idempotencyKey, previousJobId: z.uuid(), messages: z.array(message) }),
+  z.strictObject({ idempotencyKey, clientContext, previousJobId: z.uuid(), messages: z.array(message) }),
 ]);
 export type Submission = z.infer<typeof submission>;
 export const status = z.enum(["queued", "running", "retry_wait", "succeeded", "failed", "cancelled"]);

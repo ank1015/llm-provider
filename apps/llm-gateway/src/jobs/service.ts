@@ -66,7 +66,8 @@ export async function submitJob(db: Database, userId: string, input: Submission,
     validateDestination(account, extraOrigins);
     if (Buffer.byteLength(JSON.stringify(request)) > MAX_REQUEST_BYTES) throw new ApiError(413, "request_too_large", "The assembled request exceeds 16 MiB.");
     const [job] = await tx.insert(jobs).values({ userId, accountId, modelId, previousJobId: input.previousJobId,
-      idempotencyKey: input.idempotencyKey, requestHash }).returning({ id: jobs.id, status: jobs.status });
+      idempotencyKey: input.idempotencyKey, requestHash, clientContext: input.clientContext })
+      .returning({ id: jobs.id, status: jobs.status });
     await tx.insert(jobRequests).values({ jobId: job!.id, request });
     await tx.execute(sql`select pg_notify(${JOB_READY_CHANNEL}, ${job!.id})`);
     return job!;
@@ -75,6 +76,7 @@ export async function submitJob(db: Database, userId: string, input: Submission,
 
 export async function getJob(db: Database, userId: string, id: string) {
   const [job] = await db.select({ ...metadata, response: jobs.response, error: jobs.error,
+    clientContext: jobs.clientContext,
     request: sql<StoredRequest | null>`case when ${jobRequests.expiresAt} is null or ${jobRequests.expiresAt} > now() then ${jobRequests.request} else null end`,
     requestExpiresAt: jobRequests.expiresAt,
   }).from(jobs).innerJoin(providerAccounts, eq(jobs.accountId, providerAccounts.id))

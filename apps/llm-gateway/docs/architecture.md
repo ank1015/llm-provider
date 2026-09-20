@@ -112,7 +112,8 @@ Job states are `queued`, `running`, `retry_wait`, `succeeded`, `failed`, and
 The API normalizes and fingerprints the complete submission. A transaction-level
 advisory lock serializes one user's use of an idempotency key. Repeating the same
 submission returns the original job; reusing the key with different input returns
-a conflict.
+a conflict. The optional opaque `clientContext` object is part of that fingerprint
+and is stored atomically on the job before acceptance.
 
 Idempotency covers durable acceptance. If a worker loses contact after sending a
 provider request, the provider outcome can be unknown and a recovery attempt can
@@ -132,7 +133,9 @@ options. Its stored messages are:
 3. the child's new messages.
 
 The child stores a complete independent snapshot. Later execution never walks a
-lineage chain, but repeated large contexts consume proportional storage.
+lineage chain, but repeated large contexts consume proportional storage. Client
+context is job-local rather than inherited: only a context explicitly supplied
+on the continuation is stored on the child.
 
 ## Concurrency and coordination
 
@@ -171,9 +174,12 @@ Bounded wait requests use it for prompt wake-up, then read the job. The initial
 read, subscription, and second read close the completion race. A missed hint can
 delay a response until its wait timeout, but cannot hide or lose the stored result.
 
-Terminal webhooks deliberately contain identifiers and timestamps, not LLM output
-or errors. Consumers retrieve the job after durably accepting the event. This keeps
-delivery and inbox payloads small and makes PostgreSQL the only result authority.
+Terminal webhooks deliberately contain identifiers, timestamps, and the job's
+optional unchanged client context, not LLM output or errors. Consumers retrieve
+the job after durably accepting the event. This keeps delivery and inbox payloads
+small and makes PostgreSQL the only result authority. Context is part of the
+immutable signed payload across retries and redelivery; it is never model input or
+callback-routing configuration.
 
 Callback failure never repeats the LLM job. Manual redelivery starts a new
 delivery retry cycle for the same immutable event.

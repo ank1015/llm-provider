@@ -29,9 +29,9 @@ const transient = { httpStatus: 503, error: { code: "http_error", message: "Temp
 function request(path: string, method = "GET", token = first.key.secret) {
   return app.request(path, { method, headers: { authorization: `Bearer ${token}` } });
 }
-async function event() {
+async function event(clientContext?: Record<string, unknown>) {
   const job = await submitJob(db, first.user.id, { idempotencyKey: randomUUID(), previousJobId: null,
-    accountId: account.id, modelId: "gpt-6-astra", messages: [], tools: [], providerOptions: {} });
+    accountId: account.id, modelId: "gpt-6-astra", messages: [], tools: [], providerOptions: {}, clientContext });
   await cancelJob(db, first.user.id, job.id);
   const [delivery] = await db.select().from(deliveries).where(eq(deliveries.jobId, job.id));
   assert.ok(delivery); return delivery;
@@ -100,7 +100,9 @@ describe("webhook API and worker", () => {
   });
 
   it("delivers signed events without changing jobs, payloads, or provider attempts", async () => {
-    const item = await event();
+    const context = { routeKey: "minimal-bash-v6", nested: { operationId: "op-1" } };
+    const item = await event(context);
+    assert.deepEqual(item.payload.clientContext, context);
     let calls = 0;
     await runOnce(db, createSender(config.encryptionKey, ["https://example.com"], async (url, init) => {
       calls++; assert.equal(url, item.callbackUrl);
@@ -151,14 +153,17 @@ describe("webhook API and worker", () => {
   });
 
   it("manual redelivery resets the budget and keeps lifetime history and event identity", async () => {
-    const item = await event();
+    const context = { routeKey: "redelivery", submissionId: "sub-1" };
+    const item = await event(context);
     for (let i = 0; i < 8; i++) { await due(item.id); await runOnce(db, async () => transient, signal()); }
     const accepted = await request(`/v1/webhook-deliveries/${item.id}/redeliver`, "POST");
     assert.equal(accepted.status, 202);
     assert.equal((await accepted.json()).retryFromAttempt, 9);
+    await due(item.id);
     await runOnce(db, async () => ({ httpStatus: 200 }), signal());
     const row = await stored(item.id); assert.equal(row.status, "delivered");
     assert.deepEqual(row.payload, item.payload); assert.equal(row.callbackUrl, item.callbackUrl);
+    assert.deepEqual(row.payload.clientContext, context);
     assert.equal((await history(item.id)).length, 9);
     const details = await (await request(`/v1/webhook-deliveries/${item.id}?attemptLimit=2`)).json();
     assert.deepEqual(details.attempts.data.map((x: { attemptNumber: number }) => x.attemptNumber), [9, 8]);

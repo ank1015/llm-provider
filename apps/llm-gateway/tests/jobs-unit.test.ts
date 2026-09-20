@@ -15,11 +15,26 @@ const input = { accountId: randomUUID(), modelId: "gpt-6-astra", idempotencyKey:
 it("normalizes fresh defaults and fingerprints object order but preserves array order", () => {
   const a = submission.parse(input);
   const b = submission.parse({ ...input, previousJobId: null, tools: [], providerOptions: {} });
+  assert.ok(!("clientContext" in a));
   assert.equal(fingerprint(a), fingerprint(b));
   assert.equal(fingerprint(submission.parse({ ...input, providerOptions: { a: 1, b: { c: 2, d: 3 } } })),
     fingerprint(submission.parse({ ...input, providerOptions: { b: { d: 3, c: 2 }, a: 1 } })));
   assert.notEqual(fingerprint(submission.parse({ ...input, providerOptions: { order: [1, 2] } })),
     fingerprint(submission.parse({ ...input, providerOptions: { order: [2, 1] } })));
+});
+
+it("accepts optional object client context for fresh and continuation submissions and fingerprints it", () => {
+  const context = { routeKey: "minimal-bash-v6", nested: { operationId: "op-1" } };
+  const fresh = submission.parse({ ...input, clientContext: context });
+  const continuation = submission.parse({ idempotencyKey: "next", previousJobId: randomUUID(), messages: [], clientContext: context });
+  assert.deepEqual(fresh.clientContext, context);
+  assert.deepEqual(continuation.clientContext, context);
+  assert.notEqual(fingerprint(fresh), fingerprint(submission.parse(input)));
+  assert.notEqual(fingerprint(fresh), fingerprint(submission.parse({ ...input, clientContext: { ...context, routeKey: "other" } })));
+  for (const invalid of [null, [], "opaque", 42]) {
+    assert.ok(!submission.safeParse({ ...input, clientContext: invalid }).success);
+    assert.ok(!submission.safeParse({ idempotencyKey: "next", previousJobId: randomUUID(), messages: [], clientContext: invalid }).success);
+  }
 });
 
 it("validates bounded job waits and wakes only subscribers for the completed job", async () => {

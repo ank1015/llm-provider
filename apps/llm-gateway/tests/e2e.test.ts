@@ -5,7 +5,7 @@ import type { Provider } from "@llm-providers/contracts";
 import { startStack, until } from "./helpers/stack.js";
 
 it("runs the compiled gateway end to end with all three provider protocols", { timeout: 120_000 }, async () => {
-  const callbacks: { eventId: string; type: string; jobId: string; completedAt: string }[] = [];
+  const callbacks: { eventId: string; type: string; jobId: string; clientContext?: Record<string, unknown>; completedAt: string }[] = [];
   const upstream: { provider: string; body: Record<string, unknown> }[] = [];
   const receiverErrors: unknown[] = [];
   let webhookSecret = "";
@@ -31,6 +31,7 @@ it("runs the compiled gateway end to end with all three provider protocols", { t
       }
       const provider = req.url!.split("/")[1]!;
       upstream.push({ provider, body });
+      assert.equal(body.clientContext, undefined);
       assert.equal(req.headers.authorization, `Bearer test-${provider}-credential`);
       assert.equal(req.method, "POST");
       if (provider === "openai" && retryProvider) {
@@ -107,7 +108,8 @@ it("runs the compiled gateway end to end with all three provider protocols", { t
     const message = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
     const openai = accounts.get("openai")!;
     const fresh = (key: string) => ({ accountId: openai.id, modelId: openai.modelId,
-      idempotencyKey: key, instructions: "Be brief.", messages: [message("Hello")] });
+      idempotencyKey: key, clientContext: { routeKey: key, operationId: `op-${key}` },
+      instructions: "Be brief.", messages: [message("Hello")] });
     const cancelled = await request("/v1/jobs", token, "POST", fresh("cancel"), 202);
     assert.equal((await request(`/v1/jobs/${cancelled.id}/cancel`, token, "POST")).status, "cancelled");
     let worker = stack.worker();
@@ -122,6 +124,7 @@ it("runs the compiled gateway end to end with all three provider protocols", { t
       await request("/v1/jobs", token, "POST", { ...input, instructions: "Changed" }, 409);
       const job = await finish(submitted.id);
       assert.equal(job.status, "succeeded");
+      assert.deepEqual(job.clientContext, input.clientContext);
       assert.equal(job.response.message.provider, provider);
       assert.equal(job.response.usage.output, 2);
       assert.equal(job.requestStatus, "retained");
@@ -131,6 +134,7 @@ it("runs the compiled gateway end to end with all three provider protocols", { t
       }, 202);
       const continued = await finish(child.id);
       assert.equal(continued.status, "succeeded");
+      assert.equal(continued.clientContext, null);
       assert.deepEqual(continued.request.messages, [...input.messages, job.response.message, message("Continue")]);
       const wire = upstream.filter((call) => call.provider === provider).at(-1)!.body;
       const messages = (provider === "fireworks" ? wire.messages : wire.input) as unknown[];
@@ -153,12 +157,15 @@ it("runs the compiled gateway end to end with all three provider protocols", { t
       (result) => result.data.length === 8 && result.data.every((item: { status: string }) => item.status === "delivered"));
     const delivery = deliveries.data.find((item: { jobId: string }) => item.jobId === parents[0]);
     const details = await request(`/v1/webhook-deliveries/${delivery.id}`, token);
-    assert.deepEqual(Object.keys(details.payload).sort(), ["completedAt", "eventId", "jobId", "type"]);
+    assert.deepEqual(Object.keys(details.payload).sort(), ["clientContext", "completedAt", "eventId", "jobId", "type"]);
     assert.equal(details.payload.jobId, parents[0]);
+    assert.deepEqual(details.payload.clientContext, { routeKey: "openai", operationId: "op-openai" });
     const priorCallbacks = callbacks.filter((event) => event.eventId === delivery.id).length;
     await request(`/v1/webhook-deliveries/${delivery.id}/redeliver`, token, "POST", undefined, 202);
     await until(() => request(`/v1/webhook-deliveries/${delivery.id}`, token), (result) => result.status === "delivered");
     assert.equal(callbacks.filter((event) => event.eventId === delivery.id).length, priorCallbacks + 1);
+    assert.ok(callbacks.filter((event) => event.eventId === delivery.id)
+      .every((event) => JSON.stringify(event.clientContext) === JSON.stringify(details.payload.clientContext)));
     assert.equal((await request("/v1/usage", token)).summary.jobs.total, "8");
     const usage = await request("/v1/usage?groupBy=provider", token);
     assert.equal(usage.data.length, 3);

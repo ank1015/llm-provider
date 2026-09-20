@@ -68,6 +68,7 @@ export const jobs = pgTable("jobs", {
   modelId: text("model_id").notNull(),
   idempotencyKey: text("idempotency_key").notNull(),
   requestHash: text("request_hash").notNull(),
+  clientContext: json("client_context").$type<Record<string, unknown>>(),
   status: text("status", { enum: ["queued", "running", "retry_wait", "succeeded", "failed", "cancelled"] }).notNull().default("queued"),
   response: json("response").$type<AssistantResponse>(),
   usage: jsonb("usage").$type<Usage>(),
@@ -93,6 +94,7 @@ export const jobs = pgTable("jobs", {
   check("jobs_finished_check", sql`(${t.status} in ('succeeded', 'failed', 'cancelled')) = (${t.finishedAt} is not null)`),
   check("jobs_lease_check", sql`(${t.leaseToken} is null) = (${t.leaseExpiresAt} is null)`),
   check("jobs_parent_check", sql`${t.previousJobId} <> ${t.id}`),
+  check("jobs_client_context_check", sql`${t.clientContext} is null or json_typeof(${t.clientContext}) = 'object'`),
   index("jobs_user_created_idx").on(t.userId, t.createdAt.desc(), t.id.desc()),
   index("jobs_user_account_created_idx").on(t.userId, t.accountId, t.createdAt.desc(), t.id.desc()),
   index("jobs_parent_idx").on(t.userId, t.previousJobId).where(sql`${t.previousJobId} is not null`),
@@ -164,13 +166,8 @@ export const webhookDeliveries = pgTable("webhook_deliveries", {
   check("webhook_deliveries_retry_check", sql`${t.retryFromAttempt} > 0`),
   check("webhook_deliveries_delivered_check", sql`${t.status} <> 'delivered' or ${t.deliveredAt} is not null`),
   check("webhook_deliveries_lease_check", sql`(${t.leaseToken} is null) = (${t.leaseExpiresAt} is null)`),
-  check("webhook_deliveries_payload_check", sql`json_typeof(${t.payload}) = 'object'
-    and ${t.payload}::jsonb ?& array['eventId', 'type', 'jobId', 'completedAt']
-    and ${t.payload}::jsonb - array['eventId', 'type', 'jobId', 'completedAt'] = '{}'::jsonb
-    and ${t.payload}->>'eventId' = ${t.id}::text
-    and ${t.payload}->>'type' = ${t.eventType}
-    and ${t.payload}->>'jobId' = ${t.jobId}::text
-    and json_typeof(${t.payload}->'completedAt') = 'string'`),
+  // Keep this check shallow: JSON field operators reject escaped NULs and lone surrogates.
+  check("webhook_deliveries_payload_check", sql`json_typeof(${t.payload}) = 'object'`),
   index("webhook_deliveries_user_created_idx").on(t.userId, t.createdAt.desc(), t.id.desc()),
   index("webhook_deliveries_runnable_idx").on(t.nextAttemptAt, t.id).where(sql`${t.status} in ('pending', 'retry_wait')`),
   index("webhook_deliveries_expired_lease_idx").on(t.leaseExpiresAt).where(sql`${t.status} = 'delivering'`),

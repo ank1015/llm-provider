@@ -7,6 +7,7 @@ export interface TerminalJobEvent {
   eventId: string;
   type: "job.succeeded" | "job.failed" | "job.cancelled";
   jobId: string;
+  clientContext?: Record<string, unknown>;
   completedAt: string;
 }
 
